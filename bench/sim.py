@@ -150,7 +150,24 @@ class TrenchSim:
         first_fit = self.maximum_length <= 7 and pid > 32 and self.trench_length <= 25000
         chosen_block = None
 
-        if not first_fit and self.trench_length > 25000:
+        if self.first_length == 20:
+            if len(self.bins[req_len]) > 0:
+                chosen_block = self.bins[req_len][0]
+            else:
+                best_cand = None
+                for b in range(req_len + 5, 41):
+                    if len(self.bins[b]) > 0:
+                        cand = self.bins[b][0]
+                        if best_cand is None or cand.start < best_cand.start:
+                            best_cand = cand
+                        break
+                if len(self.large_bin) > 0:
+                    cand = self.large_bin[0]
+                    if cand.length >= req_len + 5 or cand.length == req_len:
+                        if best_cand is None or cand.start < best_cand.start:
+                            best_cand = cand
+                chosen_block = best_cand
+        elif not first_fit and self.trench_length > 25000:
             if len(self.bins[req_len]) > 0:
                 chosen_block = self.bins[req_len][0]
             elif len(self.large_bin) > 0:
@@ -199,6 +216,9 @@ class TrenchSim:
                 batch_growth = (req_len * count + 19) // 20
                 if batch_growth > n:
                     n = batch_growth
+            if self.trench_length > 83000 and not batch:
+                if n < 8:
+                    n = 8
             self.trench_length += n * 20
             block_length = self.trench_length - block_start
 

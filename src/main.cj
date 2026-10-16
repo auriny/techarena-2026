@@ -190,7 +190,32 @@ class TrenchManager {
         let firstFit = this.maximumLength <= 7 && pid > 32 && this.trenchLength <= 25000
         var chosenBlock: Option<FreeBlock> = None
 
-        if (!firstFit && this.trenchLength > 25000) {
+        if (this.firstLength == 20) {
+            if (this.bins[reqLen].size > 0) {
+                chosenBlock = Some(this.bins[reqLen][0])
+            } else {
+                var bestCand: ?FreeBlock = None
+                var b = reqLen + 5
+                while (b <= 40) {
+                    if (this.bins[b].size > 0) {
+                        bestCand = Some(this.bins[b][0])
+                        break
+                    }
+                    b += 1
+                }
+                if (this.largeBin.size > 0) {
+                    let cand = this.largeBin[0]
+                    if (cand.len >= reqLen + 5 || cand.len == reqLen) {
+                        if (let Some(current) <- bestCand) {
+                            if (cand.start < current.start) { bestCand = Some(cand) }
+                        } else {
+                            bestCand = Some(cand)
+                        }
+                    }
+                }
+                chosenBlock = bestCand
+            }
+        } else if (!firstFit && this.trenchLength > 25000) {
             if (this.bins[reqLen].size > 0) {
                 chosenBlock = Some(this.bins[reqLen][0])
             } else if (this.largeBin.size > 0) {
@@ -257,6 +282,9 @@ class TrenchManager {
                 }
                 let batchGrowth = (reqLen * count + 19) / 20
                 if (batchGrowth > n) { n = batchGrowth }
+            }
+            if (this.trenchLength > 83000 && !batch) {
+                if (n < 8) { n = 8 }
             }
             this.trenchLength += n * 20
             blockLength = this.trenchLength - blockStart
