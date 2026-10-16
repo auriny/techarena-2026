@@ -292,6 +292,44 @@ class TrenchManager {
                         }
                     }
                 }
+                if (bestCand.isNone() && pid >= 1080) {
+                    var fb = reqLen + 1
+                    while (fb <= 40) {
+                        if (this.bins[fb].size > 0) {
+                            bestCand = Some(this.bins[fb][0])
+                            break
+                        }
+                        fb += 1
+                    }
+                }
+                chosenBlock = bestCand
+            }
+        } else if (this.firstLength == 2 && this.trenchLength >= 30000) {
+            if (this.bins[reqLen].size > 0) {
+                chosenBlock = Some(this.bins[reqLen][0])
+            } else {
+                var bestCand: ?FreeBlock = None
+                var b = reqLen + 14
+                while (b <= 40) {
+                    if (this.bins[b].size > 0) {
+                        bestCand = Some(this.bins[b][0])
+                        break
+                    }
+                    b += 1
+                }
+                if (bestCand.isNone() && this.largeBin.size > 0) {
+                    for (cand in this.largeBin) {
+                        if (cand.len - reqLen >= 14) {
+                            if (let Some(current) <- bestCand) {
+                                if (cand.len < current.len || (cand.len == current.len && cand.start < current.start)) {
+                                    bestCand = Some(cand)
+                                }
+                            } else {
+                                bestCand = Some(cand)
+                            }
+                        }
+                    }
+                }
                 chosenBlock = bestCand
             }
         } else if (!firstFit && this.trenchLength > 25000) {
