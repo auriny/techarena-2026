@@ -1,0 +1,14 @@
+[package]
+  cjc-version = "0.53.13"
+  name = "techarena2026"
+  description = "nothing here"
+  version = "1.0.0"
+  targetPlatform-dir = "targetPlatform"
+  src-dir = "src"
+  output-type = "executable"
+  compile-option = ""
+  override-compile-option = ""
+  link-option = ""
+  package-configuration = {}
+
+[dependencies]
