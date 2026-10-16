@@ -1,5 +1,5 @@
 [package]
-  cjc-version = "0.53.13"
+  cjc-version = "1.0.5"
   name = "techarena2026"
   description = "nothing here"
   version = "1.0.0"
