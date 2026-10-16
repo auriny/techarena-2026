@@ -592,6 +592,7 @@ class TrenchManager {
             }
             if (this.trenchLength > 83000 && !batch) {
                 var growth: Int64 = if (this.shortHistory && this.maximumLength > 7) { 4 } else { 8 }
+                if (pid >= 129100) { growth = 2 }
                 if (pid >= 129700) { growth = 1 }
                 if (n < growth) { n = growth }
             }
