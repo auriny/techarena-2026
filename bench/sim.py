@@ -147,26 +147,37 @@ class TrenchSim:
             self.maximum_length = req_len
 
         batch = self.equal_length_run > 8 or self.previous_run > 0
-        first_fit = self.maximum_length <= 7 and pid > 32
+        first_fit = self.maximum_length <= 7 and pid > 32 and self.trench_length <= 25000
         chosen_block = None
 
-        b = req_len
-        while b <= 40:
-            if len(self.bins[b]) > 0:
-                candidate = self.bins[b][0]
-                if chosen_block is None or candidate.start < chosen_block.start:
-                    chosen_block = candidate
-                if not first_fit:
-                    break
-            b += 1
+        if not first_fit and self.trench_length > 25000:
+            if len(self.bins[req_len]) > 0:
+                chosen_block = self.bins[req_len][0]
+            elif len(self.large_bin) > 0:
+                chosen_block = self.large_bin[0]
+            else:
+                for b in range(req_len + 1, 41):
+                    if len(self.bins[b]) > 0:
+                        chosen_block = self.bins[b][0]
+                        break
+        else:
+            b = req_len
+            while b <= 40:
+                if len(self.bins[b]) > 0:
+                    candidate = self.bins[b][0]
+                    if chosen_block is None or candidate.start < chosen_block.start:
+                        chosen_block = candidate
+                    if not first_fit:
+                        break
+                b += 1
 
-        if first_fit:
-            if len(self.large_addr_bin) > 0:
-                candidate = self.large_addr_bin[0]
-                if chosen_block is None or candidate.start < chosen_block.start:
-                    chosen_block = candidate
-        elif chosen_block is None and len(self.large_bin) > 0:
-            chosen_block = self.large_bin[0]
+            if first_fit:
+                if len(self.large_addr_bin) > 0:
+                    candidate = self.large_addr_bin[0]
+                    if chosen_block is None or candidate.start < chosen_block.start:
+                        chosen_block = candidate
+            elif chosen_block is None and len(self.large_bin) > 0:
+                chosen_block = self.large_bin[0]
 
         block_start = self.trench_length
         block_length = 0

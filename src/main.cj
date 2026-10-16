@@ -187,34 +187,51 @@ class TrenchManager {
         }
         if (reqLen > this.maximumLength) { this.maximumLength = reqLen }
         let batch = this.equalLengthRun > 8 || this.previousRun > 0
-        let firstFit = this.maximumLength <= 7 && pid > 32
+        let firstFit = this.maximumLength <= 7 && pid > 32 && this.trenchLength <= 25000
         var chosenBlock: Option<FreeBlock> = None
 
-        var b = reqLen
-        while (b <= 40) {
-            if (this.bins[b].size > 0) {
-                let candidate = this.bins[b][0]
-                if (let Some(previous) <- chosenBlock) {
-                    if (candidate.start < previous.start) { chosenBlock = Some(candidate) }
-                } else {
-                    chosenBlock = Some(candidate)
+        if (!firstFit && this.trenchLength > 25000) {
+            if (this.bins[reqLen].size > 0) {
+                chosenBlock = Some(this.bins[reqLen][0])
+            } else if (this.largeBin.size > 0) {
+                chosenBlock = Some(this.largeBin[0])
+            } else {
+                var b = reqLen + 1
+                while (b <= 40) {
+                    if (this.bins[b].size > 0) {
+                        chosenBlock = Some(this.bins[b][0])
+                        break
+                    }
+                    b += 1
                 }
-                if (!firstFit) { break }
             }
-            b += 1
-        }
+        } else {
+            var b = reqLen
+            while (b <= 40) {
+                if (this.bins[b].size > 0) {
+                    let candidate = this.bins[b][0]
+                    if (let Some(previous) <- chosenBlock) {
+                        if (candidate.start < previous.start) { chosenBlock = Some(candidate) }
+                    } else {
+                        chosenBlock = Some(candidate)
+                    }
+                    if (!firstFit) { break }
+                }
+                b += 1
+            }
 
-        if (firstFit) {
-            if (this.largeAddressBin.size > 0) {
-                let candidate = this.largeAddressBin[0]
-                if (let Some(previous) <- chosenBlock) {
-                    if (candidate.start < previous.start) { chosenBlock = Some(candidate) }
-                } else {
-                    chosenBlock = Some(candidate)
+            if (firstFit) {
+                if (this.largeAddressBin.size > 0) {
+                    let candidate = this.largeAddressBin[0]
+                    if (let Some(previous) <- chosenBlock) {
+                        if (candidate.start < previous.start) { chosenBlock = Some(candidate) }
+                    } else {
+                        chosenBlock = Some(candidate)
+                    }
                 }
+            } else if (chosenBlock.isNone() && this.largeBin.size > 0) {
+                chosenBlock = Some(this.largeBin[0])
             }
-        } else if (chosenBlock.isNone() && this.largeBin.size > 0) {
-            chosenBlock = Some(this.largeBin[0])
         }
 
         var blockStart = this.trenchLength
