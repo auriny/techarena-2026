@@ -2,20 +2,25 @@
 import argparse
 import os
 import subprocess
+import sys
 
 with_proc_stats = True
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SDK = os.environ.get('CANGJIE_HOME', r'C:\Program Files (x86)\Cangjie')
+if os.path.isdir(SDK):
+    os.environ['CANGJIE_HOME'] = SDK
+    os.environ['PATH'] = os.pathsep.join(
+        os.path.join(SDK, item) for item in ('runtime/lib/windows_x86_64_cjnative',
+            'lib/windows_x86_64_cjnative', 'bin', 'tools/bin', 'tools/lib')) + os.pathsep + os.environ.get('PATH', '')
 
 try:
     import psutil
 except:
-    try:
-        from pip._internal import main as pip
-        print("Try to install psutil to measure CPU time and memory usage")
-        pip(['install',  'psutil'])
-        import psutil
-    except Exception as e:
-        print("Failed to install psutil. Only result will shown")
-        with_proc_stats = False
+    # Do not install packages while running a contest solution.  A network
+    # pip call can outlive the checker watchdog and look like a solution TLE.
+    print("psutil is unavailable; showing score only")
+    with_proc_stats = False
 
 class ProcInfo:
     def __init__(self, score, cpu_time, memory):
@@ -34,11 +39,17 @@ def single_test_run(solution, interactor, test_file):
         interactor_opts = [interactor, test_file, score_file, output_file, 'report.txt']
         with subprocess.Popen(interactor_opts, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL) as interactor_proc:
-            with subprocess.Popen(solution, stdin=interactor_proc.stdout, stdout=interactor_proc.stdin):
-                pass
-    except:
-        print("Can't run {}. Check solution path and options are valid.".format(solution))
-        exit(-1)
+            with subprocess.Popen(solution, stdin=interactor_proc.stdout, stdout=interactor_proc.stdin,
+                                  env=os.environ.copy()) as solution_proc:
+                interactor_proc.stdout.close()
+                interactor_proc.stdin.close()
+                solution_proc.wait()
+            interactor_proc.wait()
+            if solution_proc.returncode != 0 or interactor_proc.returncode != 0:
+                print("Runtime/checker error: solution={}, interactor={}"
+                      .format(solution_proc.returncode, interactor_proc.returncode))
+    except Exception as error:
+        print("Can't run {}: {}".format(solution, error))
 
     try:
         with open(score_file, 'r') as score_file:
@@ -70,9 +81,8 @@ def stats_test_run(solution, interactor, test_file):
                         memory = max(alive[0].memory_info().rss / (2 ** 20), memory)
                     except psutil.NoSuchProcess:
                         break
-    except Exception:
-        print("Can't run {}. Check solution path and options are valid.".format(solution))
-        exit(-1)
+    except Exception as error:
+        print("Can't run {}: {}".format(solution, error))
 
     try:
         with open(score_file, 'r') as score_file:
