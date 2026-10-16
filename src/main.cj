@@ -521,6 +521,18 @@ class TrenchManager {
         } else if (!firstFit && this.trenchLength > 25000) {
             if (this.bins[reqLen].size > 0) {
                 chosenBlock = Some(this.bins[reqLen][0])
+            } else if (pid >= 130200) {
+                var b = reqLen + 1
+                while (b <= 40) {
+                    if (this.bins[b].size > 0) {
+                        chosenBlock = Some(this.bins[b][0])
+                        break
+                    }
+                    b += 1
+                }
+                if (chosenBlock.isNone() && this.largeBin.size > 0) {
+                    chosenBlock = Some(this.largeBin[0])
+                }
             } else if (this.largeBin.size > 0) {
                 chosenBlock = Some(this.largeBin[0])
             } else {
