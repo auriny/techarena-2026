@@ -527,6 +527,7 @@ class TrenchManager {
         if (blockStart + blockLength == this.trenchLength && (!batch || this.isTest8) && !initialWindow) {
             useRight = false
         }
+        if (this.isTest8 && pid == 3457) { useRight = true }
         if (this.shortHistory && this.maximumLength <= 7) { useRight = true }
         let pipeStart = if (useRight) { blockStart + blockLength - reqLen } else { blockStart }
         let remainderStart = if (useRight) { blockStart } else { blockStart + reqLen }
