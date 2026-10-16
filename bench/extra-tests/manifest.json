@@ -1,0 +1,452 @@
+[
+  {
+    "number": 16,
+    "name": "single-1",
+    "description": "One pipe of length 1; dig rounding boundaries.",
+    "seed": null,
+    "operations": 1,
+    "weight": 1,
+    "sha256": "46964811c1e5d970fb6adebde76da0dcf1d0954921d349575538d34b90bfee86"
+  },
+  {
+    "number": 17,
+    "name": "single-2",
+    "description": "One pipe of length 2; dig rounding boundaries.",
+    "seed": null,
+    "operations": 1,
+    "weight": 1,
+    "sha256": "76f0f5e8f0008f39d016bd6dcf992ee24f6cf99b3bec78675ffeb9ec869eb7ba"
+  },
+  {
+    "number": 18,
+    "name": "single-19",
+    "description": "One pipe of length 19; dig rounding boundaries.",
+    "seed": null,
+    "operations": 1,
+    "weight": 1,
+    "sha256": "497410af4ad0c7a539939e9b83cd8c2d59f0f8233a382a6fc9ec22b97df4ef7d"
+  },
+  {
+    "number": 19,
+    "name": "single-20",
+    "description": "One pipe of length 20; dig rounding boundaries.",
+    "seed": null,
+    "operations": 1,
+    "weight": 1,
+    "sha256": "ae2f0bb626021635e682cb8de51faf970b67d88713ead3101861a8c2fa29324e"
+  },
+  {
+    "number": 20,
+    "name": "single-21",
+    "description": "One pipe of length 21; dig rounding boundaries.",
+    "seed": null,
+    "operations": 1,
+    "weight": 1,
+    "sha256": "432cecf3b237a4fd929f10acd2d2547407622a89c2da820d92d9040d9497fb97"
+  },
+  {
+    "number": 21,
+    "name": "single-38",
+    "description": "One pipe of length 38; dig rounding boundaries.",
+    "seed": null,
+    "operations": 1,
+    "weight": 1,
+    "sha256": "7f48cb6a84905bb5d00c89bd5de49ce034afc4925bf00e5c84b2a6e06d5d4e9c"
+  },
+  {
+    "number": 22,
+    "name": "single-39",
+    "description": "One pipe of length 39; dig rounding boundaries.",
+    "seed": null,
+    "operations": 1,
+    "weight": 1,
+    "sha256": "9183106e7ac95b8f920a8faa0d123fb1d0678440abb43569246d366d2182c41a"
+  },
+  {
+    "number": 23,
+    "name": "single-40",
+    "description": "One pipe of length 40; dig rounding boundaries.",
+    "seed": null,
+    "operations": 1,
+    "weight": 1,
+    "sha256": "c64c6ef1e6d47a47cb936ed299721015a31a6e7527fa81f80368f3b2b2d9b6bb"
+  },
+  {
+    "number": 24,
+    "name": "repeated-1",
+    "description": "1000 equal pipes of length 1, no removals.",
+    "seed": null,
+    "operations": 1000,
+    "weight": 1,
+    "sha256": "426215daec6b6e291e0fdc9a8dd8b966e3910fd03219fb8c524445cd0d7f1d80"
+  },
+  {
+    "number": 25,
+    "name": "repeated-2",
+    "description": "1000 equal pipes of length 2, no removals.",
+    "seed": null,
+    "operations": 1000,
+    "weight": 1,
+    "sha256": "170e71043635a0ac0a2cc7b035edf1967048137859525ae4e9aa46e1a7600887"
+  },
+  {
+    "number": 26,
+    "name": "repeated-19",
+    "description": "1000 equal pipes of length 19, no removals.",
+    "seed": null,
+    "operations": 1000,
+    "weight": 1,
+    "sha256": "85807b4dac4eb463edf0100f81b7cd589965e965d8285f068222608192f39f9d"
+  },
+  {
+    "number": 27,
+    "name": "repeated-20",
+    "description": "1000 equal pipes of length 20, no removals.",
+    "seed": null,
+    "operations": 1000,
+    "weight": 1,
+    "sha256": "cb427745c27832d76fc8fa3f0a8047d733490373a9354d710e76db5238f2eb21"
+  },
+  {
+    "number": 28,
+    "name": "repeated-21",
+    "description": "1000 equal pipes of length 21, no removals.",
+    "seed": null,
+    "operations": 1000,
+    "weight": 1,
+    "sha256": "c76f6aec6712d090992d46acaca390a3c97afb1343d39cd67562e992a80762c3"
+  },
+  {
+    "number": 29,
+    "name": "repeated-38",
+    "description": "1000 equal pipes of length 38, no removals.",
+    "seed": null,
+    "operations": 1000,
+    "weight": 1,
+    "sha256": "c34a3d877bd0bfb36fb839c55f1b35069a6c13885b7c05151fb864e736a9f41d"
+  },
+  {
+    "number": 30,
+    "name": "repeated-39",
+    "description": "1000 equal pipes of length 39, no removals.",
+    "seed": null,
+    "operations": 1000,
+    "weight": 1,
+    "sha256": "1b98615c33fcf880118f9080cdf51717c16e8bb8e32e807a5c4a7695130f5cdf"
+  },
+  {
+    "number": 31,
+    "name": "repeated-40",
+    "description": "1000 equal pipes of length 40, no removals.",
+    "seed": null,
+    "operations": 1000,
+    "weight": 1,
+    "sha256": "2338bc2ab98f96be627b00784bf0cab283cac6a5a33a8f1ecfdd89396d8840df"
+  },
+  {
+    "number": 32,
+    "name": "ascending",
+    "description": "Deterministic allocation-only length pattern.",
+    "seed": null,
+    "operations": 4000,
+    "weight": 1,
+    "sha256": "3a5c4e01a0f8d5eb82971345ad117d1bddc80afebfa2cdbeb44d8b81f5f29352"
+  },
+  {
+    "number": 33,
+    "name": "descending",
+    "description": "Deterministic allocation-only length pattern.",
+    "seed": null,
+    "operations": 4000,
+    "weight": 1,
+    "sha256": "5f01e0bfdce0c2ad78b3c9501e4446c07c09c8b14224201944c83933e882a61c"
+  },
+  {
+    "number": 34,
+    "name": "alternating-extremes",
+    "description": "Deterministic allocation-only length pattern.",
+    "seed": null,
+    "operations": 700,
+    "weight": 1,
+    "sha256": "47ed8bbcfb83338299d1e0aa0f06432d33f701bd7cc6bb24eb949284c25b0905"
+  },
+  {
+    "number": 35,
+    "name": "exact-twenties",
+    "description": "Deterministic allocation-only length pattern.",
+    "seed": null,
+    "operations": 1000,
+    "weight": 1,
+    "sha256": "87943e068a318db2d771821bc840c0a55cd47c6fb2bf2a4eacbcfb44a2000f47"
+  },
+  {
+    "number": 36,
+    "name": "merge-right",
+    "description": "Adjacent holes freed in different orders, then reused.",
+    "seed": null,
+    "operations": 2100,
+    "weight": 1,
+    "sha256": "49edaccf8b14111c0b4d4acd26d13ac2c63811b73e75f676fc0fa07c957f87ef"
+  },
+  {
+    "number": 37,
+    "name": "merge-left",
+    "description": "Adjacent holes freed in different orders, then reused.",
+    "seed": null,
+    "operations": 2100,
+    "weight": 1,
+    "sha256": "4cb04ff68f94ac07f96da9a77df028e40020de1d66e9a1520381c2a7a0759a88"
+  },
+  {
+    "number": 38,
+    "name": "merge-both",
+    "description": "Adjacent holes freed in different orders, then reused.",
+    "seed": null,
+    "operations": 2400,
+    "weight": 1,
+    "sha256": "55830cf1cc727fca2e5bd6037b857bc67d70a32dac4f36caa53f1fd7e065a65f"
+  },
+  {
+    "number": 39,
+    "name": "free-forward",
+    "description": "Repeatedly remove every active pipe and refill; finishes empty.",
+    "seed": null,
+    "operations": 4000,
+    "weight": 1,
+    "sha256": "7bc28e3e7c9ae2420bdf2e241a50c58fb858c1f7bceb692f498889831d6fcb49"
+  },
+  {
+    "number": 40,
+    "name": "free-backward",
+    "description": "Repeatedly remove every active pipe and refill; finishes empty.",
+    "seed": null,
+    "operations": 4000,
+    "weight": 1,
+    "sha256": "fabbcd74fcb26ee51d1040b86e05a39f865fff512be09adad2e300455e9f18ff"
+  },
+  {
+    "number": 41,
+    "name": "free-shuffled",
+    "description": "Repeatedly remove every active pipe and refill; finishes empty.",
+    "seed": null,
+    "operations": 4000,
+    "weight": 1,
+    "sha256": "d38e3d1ff3396c4a524d6cb6d4bc79dcd8f8494f5e570dc4118fa661fda6563d"
+  },
+  {
+    "number": 42,
+    "name": "checkerboard-small",
+    "description": "Fragmentation, hole reuse, and growth after partial removal.",
+    "seed": null,
+    "operations": 1600,
+    "weight": 1,
+    "sha256": "d50df99a18ed9ad94bc126a860c951a84bf49bd917fd44cdc16754b60c270aaf"
+  },
+  {
+    "number": 43,
+    "name": "checkerboard-large",
+    "description": "Fragmentation, hole reuse, and growth after partial removal.",
+    "seed": null,
+    "operations": 1200,
+    "weight": 1,
+    "sha256": "884969731c2b17a1da4748530c6e98ea109e9dfa39ea944e06a1588ad399acf0"
+  },
+  {
+    "number": 44,
+    "name": "middle-hole",
+    "description": "Fragmentation, hole reuse, and growth after partial removal.",
+    "seed": null,
+    "operations": 8600,
+    "weight": 1,
+    "sha256": "ce827605c3f1308c6fccd32b5fb9e16c00669fece2dc8ceeb79ed8c39bafb264"
+  },
+  {
+    "number": 45,
+    "name": "prefix-hole",
+    "description": "Fragmentation, hole reuse, and growth after partial removal.",
+    "seed": null,
+    "operations": 1200,
+    "weight": 1,
+    "sha256": "b9dc75da2a61ce729ea13b88f5536129db157399480bfc57776589dc2089c95a"
+  },
+  {
+    "number": 46,
+    "name": "suffix-hole",
+    "description": "Fragmentation, hole reuse, and growth after partial removal.",
+    "seed": null,
+    "operations": 1200,
+    "weight": 1,
+    "sha256": "a90fc6d3c6b3920c5f9ec3a19487337f082b4d6aac6439c3cb5aa5ba51fa14a0"
+  },
+  {
+    "number": 47,
+    "name": "split-large-remainders",
+    "description": "Repeated split into 1 and 39; exact remainder reuse.",
+    "seed": null,
+    "operations": 2000,
+    "weight": 1,
+    "sha256": "2ee46c16d362c8f4cb94ee8cb1ae328a10dc5d91d9ac3775f889265f0f064b2d"
+  },
+  {
+    "number": 48,
+    "name": "large-merged-holes",
+    "description": "Merge holes beyond size 40, then split across the bin boundary.",
+    "seed": null,
+    "operations": 6000,
+    "weight": 1,
+    "sha256": "331dfc51e5e544a9696860e3c1c06c25919b12ad02f46db0b5c2bd06ac9682a7"
+  },
+  {
+    "number": 49,
+    "name": "bin-swap-removal",
+    "description": "Many equal holes; removal and merging of non-last bin elements.",
+    "seed": null,
+    "operations": 18000,
+    "weight": 1,
+    "sha256": "08abddae06168b5e38f876a5e18a48ca884f7098a2bf44d87fe66f136eefd763"
+  },
+  {
+    "number": 50,
+    "name": "random-01",
+    "description": "Seeded random: deletion probability 0.1, lengths [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40], random.",
+    "seed": 2026101600,
+    "operations": 10000,
+    "weight": 1,
+    "sha256": "b41f3de0afa7e4404ef740cd458741e5deb58c1be8e61d4e3b8c283d74fe6aa5"
+  },
+  {
+    "number": 51,
+    "name": "random-02",
+    "description": "Seeded random: deletion probability 0.35, lengths [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40], random.",
+    "seed": 2026101601,
+    "operations": 10000,
+    "weight": 1,
+    "sha256": "605c811fe508e5b5020e45ff636f4d115cb7f3ccb5cba9433a6b8a679b941a14"
+  },
+  {
+    "number": 52,
+    "name": "random-03",
+    "description": "Seeded random: deletion probability 0.49, lengths [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40], random.",
+    "seed": 2026101602,
+    "operations": 10000,
+    "weight": 1,
+    "sha256": "7ca6b3a8443acbf4f0d3beb60c0dda5491e26ec613c8de3ce4764fde65606667"
+  },
+  {
+    "number": 53,
+    "name": "random-04",
+    "description": "Seeded random: deletion probability 0.7, lengths [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40], random.",
+    "seed": 2026101603,
+    "operations": 10000,
+    "weight": 1,
+    "sha256": "9adcab2abfb746b42906a3dcde80b1dcd591ff24db41893a87d91dce6b6d3fbc"
+  },
+  {
+    "number": 54,
+    "name": "random-05",
+    "description": "Seeded random: deletion probability 0.95, lengths [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40], random.",
+    "seed": 2026101604,
+    "operations": 10000,
+    "weight": 1,
+    "sha256": "ee34fb982ced745dee4ee3cb6b6c2eb6e61369e6fe17a6919c138dfa0aff7d35"
+  },
+  {
+    "number": 55,
+    "name": "random-06",
+    "description": "Seeded random: deletion probability 0.45, lengths [1, 2, 3, 4, 5], random.",
+    "seed": 2026101605,
+    "operations": 10000,
+    "weight": 1,
+    "sha256": "1b35fbb8babe0388a36c589bc44b86c1710ae138bf4d51804e4f029f39dd4956"
+  },
+  {
+    "number": 56,
+    "name": "random-07",
+    "description": "Seeded random: deletion probability 0.45, lengths [35, 36, 37, 38, 39, 40], random.",
+    "seed": 2026101606,
+    "operations": 10000,
+    "weight": 1,
+    "sha256": "459b41b787f88b7f86c10033c5c978e1ffda02256c539c6fb94d8d410c17d027"
+  },
+  {
+    "number": 57,
+    "name": "random-08",
+    "description": "Seeded random: deletion probability 0.4, lengths [19, 20, 21, 39, 40], random.",
+    "seed": 2026101607,
+    "operations": 10000,
+    "weight": 1,
+    "sha256": "db005eeaf45ff7b2acc28c516a8bd9580e43d48f55c564202a052b41bc4d4c73"
+  },
+  {
+    "number": 58,
+    "name": "random-09",
+    "description": "Seeded random: deletion probability 0.5, lengths [1, 40], random.",
+    "seed": 2026101608,
+    "operations": 10000,
+    "weight": 1,
+    "sha256": "187ef3cc453832006576f4113ca36d73456411c7637de6243f0800f0c15be4c6"
+  },
+  {
+    "number": 59,
+    "name": "random-10",
+    "description": "Seeded random: deletion probability 0.49, lengths [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40], lifo.",
+    "seed": 2026101609,
+    "operations": 10000,
+    "weight": 1,
+    "sha256": "65b41019d6ea0c02b4c9a40fba642512a0882f20e70fed3d601df67a278b643b"
+  },
+  {
+    "number": 60,
+    "name": "random-11",
+    "description": "Seeded random: deletion probability 0.25, lengths [7, 13, 17, 23, 29, 31, 37], random.",
+    "seed": 2026101610,
+    "operations": 10000,
+    "weight": 1,
+    "sha256": "032b70f142ab97f2ac69bb706f1ecdd90f5b6975a4c6741bbf689b22b70b2713"
+  },
+  {
+    "number": 61,
+    "name": "random-12",
+    "description": "Seeded random: deletion probability 0.65, lengths [1, 2, 20, 40], lifo.",
+    "seed": 2026101611,
+    "operations": 10000,
+    "weight": 1,
+    "sha256": "db70e653f6ed97f872b42cfefcfd0cfe510bae9ee86b0c55b7f1e6d6ac2abd6b"
+  },
+  {
+    "number": 62,
+    "name": "stress-max-growth",
+    "description": "200000 allocations of length 40; 8 million occupied meters.",
+    "seed": null,
+    "operations": 200000,
+    "weight": 1,
+    "sha256": "369ee16af61ab64fe9304cb0a1127fc66a1020ee4855feee1c815a82c75e163d"
+  },
+  {
+    "number": 63,
+    "name": "stress-pid-churn",
+    "description": "200000 operations; 100000 unique PIDs, ends empty.",
+    "seed": null,
+    "operations": 200000,
+    "weight": 1,
+    "sha256": "b65a6be0fa930610797a9b519d2907d3d964993a896a8f8d5bb9c608e84c0b8d"
+  },
+  {
+    "number": 64,
+    "name": "stress-random-1",
+    "description": "200000 commands with random removal probability 0.35.",
+    "seed": 2026101690,
+    "operations": 200000,
+    "weight": 1,
+    "sha256": "4742f73d920e9bbf30b0b65aa7806536cd97cdbde96779df3d5a07e78d030c66"
+  },
+  {
+    "number": 65,
+    "name": "stress-random-2",
+    "description": "200000 commands with random removal probability 0.5.",
+    "seed": 2026101691,
+    "operations": 200000,
+    "weight": 1,
+    "sha256": "d0fc61f448a2eeaf1b5ca18e89fc9f7666577a3c89289646268173c583dfa53f"
+  }
+]
