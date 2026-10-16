@@ -6,8 +6,8 @@
   targetPlatform-dir = "targetPlatform"
   src-dir = "src"
   output-type = "executable"
-  compile-option = ""
-  override-compile-option = ""
+  compile-option = "-O2"
+  override-compile-option = "-O2"
   link-option = ""
   package-configuration = {}
 

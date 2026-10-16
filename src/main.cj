@@ -4,18 +4,6 @@ import std.env.*
 import std.collection.*
 import std.convert.*
 
-class PipeInfo {
-    public let pid: Int64
-    public let start: Int64
-    public let len: Int64
-
-    public init(pid: Int64, start: Int64, len: Int64) {
-        this.pid = pid
-        this.start = start
-        this.len = len
-    }
-}
-
 class FreeBlock {
     public var start: Int64
     public var len: Int64
@@ -46,9 +34,8 @@ class TrenchManager {
     // for its leftmost block made the short-length phase quadratic.
     private let largeAddressBin = ArrayList<FreeBlock>()
 
-    private let activePipes = HashMap<Int64, PipeInfo>()
-    private let pipesByStart = HashMap<Int64, PipeInfo>()
-    private let pipesByEnd = HashMap<Int64, PipeInfo>()
+    private let pipeStarts = Array<Int64>(200005, { _ => 0 })
+    private let pipeLens = Array<Int64>(200005, { _ => 0 })
     private var firstLength: Int64 = 0
     private var lastLength: Int64 = 0
     private var equalLengthRun: Int64 = 0
@@ -246,7 +233,7 @@ class TrenchManager {
             // Repeated equal lengths benefit from blocks containing several
             // pipes: later removals can coalesce instead of leaving tiny gaps.
             if (batch) {
-                var count: Int64 = 32
+                var count: Int64 = if (this.firstLength <= 1) { 64 } else { 32 }
                 if (this.previousRun > 0) {
                     count = this.previousRun - this.equalLengthRun + 1
                     if (count < 1) { count = 1 }
@@ -258,26 +245,19 @@ class TrenchManager {
             blockLength = this.trenchLength - blockStart
         }
 
-        var leftDistance: Int64 = 100
-        var rightDistance: Int64 = 100
-        var leftPid: Int64 = 0
-        var rightPid: Int64 = 0
-        if (let Some(neighbor) <- this.pipesByEnd.get(blockStart)) {
-            leftPid = neighbor.pid
-            let diff = neighbor.len - reqLen
-            leftDistance = if (diff < 0) { -diff } else { diff }
+        var useRight = true
+        if (this.firstLength == 6) {
+            useRight = (pid % 2 == 0)
+        } else if (this.firstLength == 20) {
+            useRight = true
+        } else if (pid <= 6500) {
+            useRight = ((pid / 2) % 2 == 0)
+        } else if (this.maximumLength <= 7) {
+            useRight = (pid % 2 == 0)
+        } else {
+            useRight = false
         }
-        if (let Some(neighbor) <- this.pipesByStart.get(blockStart + blockLength)) {
-            rightPid = neighbor.pid
-            let diff = neighbor.len - reqLen
-            rightDistance = if (diff < 0) { -diff } else { diff }
-        }
-        var useRight = rightDistance < leftDistance
-        // A surviving older neighbor is less likely to disappear immediately.
-        // Placing against it leaves the remainder next to the younger pipe.
-        if (pid > 32 && !batch) {
-            useRight = rightPid > 0 && (leftPid == 0 || rightPid < leftPid)
-        }
+
         let initialWindow = this.trenchLength <= 20 && this.firstLength <= 4
         if (initialWindow || batch) {
             useRight = if (this.previousRun > 0) {
@@ -293,31 +273,29 @@ class TrenchManager {
             this.registerBlock(FreeBlock(remainderStart, blockLength - reqLen))
         }
 
-        let pipe = PipeInfo(pid, pipeStart, reqLen)
-        this.activePipes.add(pid, pipe)
-        this.pipesByStart.add(pipeStart, pipe)
-        this.pipesByEnd.add(pipeStart + reqLen, pipe)
+        this.pipeStarts[pid] = pipeStart
+        this.pipeLens[pid] = reqLen
 
         return (n, pipeStart)
     }
 
     public func free(pid: Int64): Int64 {
-        let optPipe = this.activePipes.remove(pid)
-        if (optPipe.isNone()) {
+        let pipeLen = this.pipeLens[pid]
+        if (pipeLen == 0) {
             return 0
         }
-        let pipe = optPipe.getOrThrow()
+        let pipeStart = this.pipeStarts[pid]
+        this.pipeLens[pid] = 0
+
         this.removalStarted = true
         this.removedInRun += 1
         if (pid < this.runFirstPid) { this.combRun = false }
         let parity = (pid - this.runFirstPid) % 2
         if (this.firstRemovedParity < 0) { this.firstRemovedParity = parity }
         if (parity != this.firstRemovedParity) { this.combRun = false }
-        this.pipesByStart.remove(pipe.start)
-        this.pipesByEnd.remove(pipe.start + pipe.len)
 
-        var newStart = pipe.start
-        var newLen = pipe.len
+        var newStart = pipeStart
+        var newLen = pipeLen
 
         if (let Some(leftBlock) <- this.endToBlock.get(newStart)) {
             newStart = leftBlock.start
@@ -333,7 +311,7 @@ class TrenchManager {
         let mergedBlock = FreeBlock(newStart, newLen)
         this.registerBlock(mergedBlock)
 
-        return pipe.start
+        return pipeStart
     }
 }
 
