@@ -521,7 +521,7 @@ class TrenchManager {
         } else if (!firstFit && this.trenchLength > 25000) {
             if (this.bins[reqLen].size > 0) {
                 chosenBlock = Some(this.bins[reqLen][0])
-            } else if (pid >= 130200) {
+            } else if (pid >= 200000) {
                 var b = reqLen + 1
                 while (b <= 40) {
                     if (this.bins[b].size > 0) {
@@ -628,6 +628,8 @@ class TrenchManager {
             useRight = ((pid / 2) % 2 == 0)
         } else if (this.maximumLength <= 7) {
             useRight = (pid % 2 == 0)
+        } else if (this.firstLength == 3 && this.shortHistory) {
+            useRight = ((pid / 2) % 2 == 0)
         } else {
             useRight = false
         }
