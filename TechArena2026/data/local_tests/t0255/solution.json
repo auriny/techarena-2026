@@ -1,0 +1,17 @@
+[
+  {
+    "officeId": 0,
+    "sites": [11, 4, 13, 5],
+    "workers": [2]
+  },
+  {
+    "officeId": 1,
+    "sites": [10, 1, 12, 2, 7],
+    "workers": [3]
+  },
+  {
+    "officeId": 2,
+    "sites": [9, 3, 8, 0],
+    "workers": [0, 1]
+  }
+]
