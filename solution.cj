@@ -243,8 +243,8 @@ class TrenchManager {
 
     public func allocate(pid: Int64, reqLen: Int64): (Int64, Int64) {
         this.operation += 1
-        if (pid / 512 != this.cohortIndex) {
-            this.cohortIndex = pid / 512
+        if (pid / 502 != this.cohortIndex) {
+            this.cohortIndex = pid / 502
             this.cohortStart = this.trenchLength
         }
         if (this.maximumLength <= 7 && this.trenchLength > 25000) {
