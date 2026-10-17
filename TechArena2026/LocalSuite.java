@@ -1,5 +1,3 @@
-package org.example.hackathons.TechArena2026;
-
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -163,8 +161,11 @@ public class LocalSuite {
         System.out.printf(Locale.ROOT, "hard seed=%d count=%d%n", seed, count);
         InstanceFactory factory = new InstanceFactory(seed, true);
         StringBuilder scores = new StringBuilder();
-        scores.append("index\tscenario\tnSites\tnOff\tobj\n");
+        scores.append("index\tscenario\tnSites\tnOff\tobj\tleftoverFrac\toverlapBeforeRepair\tcheapThoroughDiffer\n");
         double sum = 0;
+        double sumLeftover = 0;
+        int sumOverlap = 0;
+        int differCount = 0;
         for (int i = 0; i < count; i++) {
             Path dir = root.resolve(String.format(Locale.ROOT, "h%04d", i));
             Files.createDirectories(dir);
@@ -178,18 +179,31 @@ public class LocalSuite {
             Main.Solution solution = solver.solve();
             Files.writeString(dir.resolve("solution.json"), solution.toJson(), StandardCharsets.UTF_8);
             sum += solution.objective;
+            sumLeftover += solver.diagLeftoverFrac;
+            sumOverlap += solver.diagOverlapPoints;
+            if (solver.diagCheapThoroughDiffer) {
+                differCount++;
+            }
             scores.append(i).append('\t').append(world.family.name()).append('\t')
                     .append(world.sites.size()).append('\t')
                     .append(world.offices.size()).append('\t')
-                    .append(String.format(Locale.ROOT, "%.6f", solution.objective)).append('\n');
+                    .append(String.format(Locale.ROOT, "%.6f", solution.objective)).append('\t')
+                    .append(String.format(Locale.ROOT, "%.6f", solver.diagLeftoverFrac)).append('\t')
+                    .append(solver.diagOverlapPoints).append('\t')
+                    .append(solver.diagCheapThoroughDiffer ? 1 : 0).append('\n');
             if ((i + 1) % 5 == 0 || i == 0) {
-                System.out.printf(Locale.ROOT, "hard %d/%d  nS=%d nO=%d obj=%.2f%n",
-                        i + 1, count, world.sites.size(), world.offices.size(), solution.objective);
+                System.out.printf(Locale.ROOT,
+                        "hard %d/%d  nS=%d nO=%d obj=%.2f leftover=%.3f overlap=%d differ=%d%n",
+                        i + 1, count, world.sites.size(), world.offices.size(), solution.objective,
+                        solver.diagLeftoverFrac, solver.diagOverlapPoints,
+                        solver.diagCheapThoroughDiffer ? 1 : 0);
             }
         }
         Files.writeString(root.resolve("scores.tsv"), scores.toString(), StandardCharsets.UTF_8);
-        System.out.printf(Locale.ROOT, "hard done meanObj=%.4f root=%s%n",
-                sum / Math.max(1, count), root.toAbsolutePath());
+        System.out.printf(Locale.ROOT,
+                "hard done meanObj=%.4f meanLeftover=%.4f overlapSum=%d cheapThoroughDiffer=%d/%d root=%s%n",
+                sum / Math.max(1, count), sumLeftover / Math.max(1, count), sumOverlap,
+                differCount, count, root.toAbsolutePath());
     }
 
     /**
@@ -793,6 +807,7 @@ public class LocalSuite {
             for (int s = 0; s < nSites; s++) {
                 Vec2 pos;
                 if (scenario == 1) {
+                    @SuppressWarnings("unused")
                     int ring = s % Math.max(2, nOff);
                     double ang = (2.0 * Math.PI * s) / nSites + rng.nextDouble() * 0.2;
                     double rad = box * (0.12 + 0.08 * (s % 3));

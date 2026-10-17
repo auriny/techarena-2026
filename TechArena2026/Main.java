@@ -24,9 +24,10 @@ import java.util.Set;
  * Ограничения повторяют validate_solution.py: индексы, ёмкость, баланс числа
  * объектов, покрытие навыков, непересекающиеся выпуклые оболочки (офис + объекты).
  *
- * Крупные скрытые: дешёвый k=2/3, thorough = рост непересекающихся оболочек.
- * Офисы add/drop по leftover-маргиналу. MLP только прогнозирует зазор
- * cheap→thorough. Работники/навыки двигаются, чтобы взять leftover.
+ * Крупные скрытые: дешёвый k=2 (все пары) и k=3, thorough — рост оболочек.
+ * Набор офисов на крупных картах берётся по cheap + прогноз зазора, не по cheap.
+ * Ремонт оболочек снимает вершину пересечения; баланс числа объектов снимает
+ * внутреннюю точку. Один проход LNS по вершинам — только на крупной карте.
  */
 public class Main {
 
@@ -385,9 +386,17 @@ public class Main {
         final List<OpenedOffice> offices;
         final double objective;
 
+        /** Сколько точек карты лежало в двух оболочках до ремонта геометрии. */
+        final int overlapBeforeRepair;
+
         Solution(List<OpenedOffice> offices, double objective) {
+            this(offices, objective, 0);
+        }
+
+        Solution(List<OpenedOffice> offices, double objective, int overlapBeforeRepair) {
             this.offices = offices;
             this.objective = objective;
+            this.overlapBeforeRepair = overlapBeforeRepair;
         }
 
         static Solution empty() {
@@ -1146,6 +1155,20 @@ public class Main {
         private static final int PAIR_TRY_CAP = 48;
         /** Полный cheap-перебор C(n,k). 5000 съедал k=2/3 на скрытых 5/11. */
         private static final long ENUM_COMBOS = 450L;
+        /** Сколько лучших по (reward−dist) сайтов смотрит рост оболочки на большой карте. */
+        private static final int GROW_VALUE_CAP = 28;
+        /** Если топ не влез в оболочку, досматриваем ещё столько же пачек. */
+        private static final int GROW_EXTEND_FACTOR = 4;
+        /** Короткий LNS: сколько вершин оболочки снять за один проход. */
+        private static final int LNS_VERTEX_MIN = 2;
+        private static final int LNS_VERTEX_MAX = 4;
+        /** Сколько объектов с большим числом задач пробуем перенести ради α. */
+        private static final int TASK_SHIFT_CAP = 12;
+        /** Сколько дешёвых объектов донора можно снять, чтобы освободить навык. */
+        private static final int SKILL_RELEASE_SITES = 2;
+        /** Thorough на крупной карте: сначала наборы с большим прогнозом зазора. */
+        private static final int LARGE_GAP_ELITES = 6;
+        private static final int LARGE_CHEAP_ELITES = 2;
 
         private final Instance inst;
         private final long deadlineNanos;
@@ -1158,6 +1181,15 @@ public class Main {
         private final int[][] bestIdsByK;
         private final double[] officeSingle;
         private final RankNet rankNet;
+        /** Доля положительного (reward − min dist), которая осталась вне ответа. */
+        double diagLeftoverFrac;
+        /** Точки пересечения оболочек у принятого ответа до repairGeometry. */
+        int diagOverlapPoints;
+        /** Победитель cheap и итоговый набор офисов — разные множества. */
+        boolean diagCheapThoroughDiffer;
+        private int[] cheapBestIds;
+        private double cheapBestObj = -1e100;
+        private int acceptedOverlap;
 
         static final class Elite {
             final int[] ids;
@@ -1258,14 +1290,15 @@ public class Main {
                 searchUntilTime(rank, predicted, maxK);
             }
 
-            if (!best.offices.isEmpty() && timeLeft()) {
-                consider(construct(bestIds(), true));
-            }
-            if (compact() && timeLeft()) {
+            if (timeLeft()) {
+                // И на крупных картах очередь thorough — по cheap + прогноз зазора.
+                // Победитель каждого k по дешёвой цели идёт в хвост той же очереди.
                 refineThorough(rank);
-            } else if (timeLeft()) {
-                thoroughBestPerK();
             }
+            if (!compact() && timeLeft() && !best.offices.isEmpty()) {
+                consider(hullVertexLns(best));
+            }
+            publishDiag();
             return best;
         }
 
@@ -1293,6 +1326,7 @@ public class Main {
         }
 
         /** Все cheap-маски без thorough: 2^{nOff} ещё влезает в CPU. */
+        @SuppressWarnings("unused")
         private boolean cheapAllFits() {
             int nOff = inst.offices.length;
             if (nOff > 11 || nOff <= 0) {
@@ -1371,16 +1405,8 @@ public class Main {
             out.add(new RankNet.FitSample(rankNet.features(ids), rankNet.targetOf(obj - cheapObj)));
         }
 
-        /** Thorough лучшего набора каждого k — дёшево и закрывает «cheap недооценил». */
-        private void thoroughBestPerK() {
-            for (int k = 1; k < bestIdsByK.length && timeLeft(); k++) {
-                if (bestIdsByK[k] != null) {
-                    consider(construct(bestIdsByK[k], true));
-                }
-            }
-        }
-
         /** Все непустые подмножества. */
+        @SuppressWarnings("unused")
         private void searchAllMasks(int maxK, boolean thorough) {
             int nOff = inst.offices.length;
             int limit = 1 << nOff;
@@ -1462,22 +1488,24 @@ public class Main {
         private void refineThorough(Integer[] rank) {
             List<int[]> queue = new ArrayList<>();
             addUniqueSet(queue, bestIds());
-            elites.sort((a, b) -> Double.compare(b.obj, a.obj));
-            int byCheap = compact() ? ELITE_CAP / 2 : 3;
+            // Сначала наборы, у которых модель ждёт большой зазор thorough−cheap.
+            // На крупной карте это важнее победителя по дешёвой цели.
+            List<Elite> byModel = new ArrayList<>(elites);
+            byModel.sort((a, b) -> Double.compare(rankNet.predict(b.ids), rankNet.predict(a.ids)));
+            int byRank = compact() ? ELITE_CAP : LARGE_GAP_ELITES;
             int extra = 0;
-            for (Elite e : elites) {
-                if (extra >= byCheap) {
+            for (Elite e : byModel) {
+                if (extra >= byRank) {
                     break;
                 }
                 addUniqueSet(queue, e.ids);
                 extra++;
             }
-            List<Elite> byModel = new ArrayList<>(elites);
-            byModel.sort((a, b) -> Double.compare(rankNet.predict(b.ids), rankNet.predict(a.ids)));
+            elites.sort((a, b) -> Double.compare(b.obj, a.obj));
+            int byCheap = compact() ? ELITE_CAP / 2 : LARGE_CHEAP_ELITES;
             extra = 0;
-            int byRank = compact() ? ELITE_CAP : 4;
-            for (Elite e : byModel) {
-                if (extra >= byRank) {
+            for (Elite e : elites) {
+                if (extra >= byCheap) {
                     break;
                 }
                 addUniqueSet(queue, e.ids);
@@ -1603,7 +1631,9 @@ public class Main {
         private void searchK(int k, Integer[] rank) {
             int nOff = inst.offices.length;
             long combos = binom(nOff, k);
-            if (combos <= ENUM_COMBOS) {
+            // k=2 всегда целиком: пары уже обгоняли семплинг k=4 на крупных тестах.
+            // Останавливаемся по резерву thorough, а не по жёсткому дедлайну.
+            if (k <= 2 || combos <= ENUM_COMBOS) {
                 int[] buf = new int[k];
                 enumerate(0, 0, k, buf);
                 return;
@@ -1648,7 +1678,7 @@ public class Main {
         }
 
         private void enumerate(int start, int filled, int k, int[] buf) {
-            if (!timeLeft()) {
+            if (!searchTimeLeft()) {
                 return;
             }
             if (filled == k) {
@@ -1659,7 +1689,7 @@ public class Main {
             for (int i = start; i <= nOff - (k - filled); i++) {
                 buf[filled] = i;
                 enumerate(i + 1, filled + 1, k, buf);
-                if (!timeLeft()) {
+                if (!searchTimeLeft()) {
                     return;
                 }
             }
@@ -1883,6 +1913,57 @@ public class Main {
                 growOneOffice(oid, taken, skills, t);
             }
             recoverLeftovers(oid, taken, skills);
+            return finalize(oid, taken);
+        }
+
+        /**
+         * Один проход LNS на крупной карте: снять 2–4 вершины оболочек и заново
+         * заполнить leftover. Без полного polish — тот на больших тестах съедает CPU.
+         */
+        @SuppressWarnings("unchecked")
+        private Solution hullVertexLns(Solution cur) {
+            if (cur == null || cur.offices.isEmpty() || !timeLeft()) {
+                return Solution.empty();
+            }
+            int[] oid = idsOf(cur);
+            List<Cand>[] taken = takenFromSolution(oid, cur);
+            // Навыки снимаем до выкидывания вершин, чтобы зона не потеряла покрытие.
+            BitSet[] skills = skillsFromTaken(oid, taken);
+            int budget = LNS_VERTEX_MAX;
+            int dropped = 0;
+            int perOffice = oid.length <= 1 ? LNS_VERTEX_MAX : LNS_VERTEX_MIN;
+            for (int t = 0; t < oid.length && dropped < budget && timeLeft(); t++) {
+                if (taken[t].size() < 3) {
+                    continue;
+                }
+                boolean[] vertex = hullVertexFlags(oid[t], taken[t]);
+                List<Integer> order = new ArrayList<>();
+                for (int i = 0; i < taken[t].size(); i++) {
+                    if (vertex[i]) {
+                        order.add(i);
+                    }
+                }
+                List<Cand> zone = taken[t];
+                order.sort(Comparator.comparingDouble(i -> zone.get(i).value));
+                int room = Math.min(perOffice, Math.min(budget - dropped, taken[t].size() - 1));
+                List<Integer> dropAt = new ArrayList<>();
+                for (int i = 0; i < order.size() && dropAt.size() < room; i++) {
+                    dropAt.add(order.get(i));
+                }
+                dropAt.sort((a, b) -> Integer.compare(b, a));
+                for (int idx : dropAt) {
+                    taken[t].remove((int) idx);
+                    dropped++;
+                }
+            }
+            if (dropped == 0) {
+                return Solution.empty();
+            }
+            for (int t = 0; t < oid.length && timeLeft(); t++) {
+                growOneOffice(oid, taken, skills, t);
+            }
+            recoverLeftovers(oid, taken, skills);
+            tryShiftTasks(oid, taken, skills);
             return finalize(oid, taken);
         }
 
@@ -2121,6 +2202,7 @@ public class Main {
                 return;
             }
             best = sol;
+            acceptedOverlap = sol.overlapBeforeRepair;
         }
 
         private int[] idsOf(Solution sol) {
@@ -2159,9 +2241,9 @@ public class Main {
         }
 
         /**
-         * Собирает решение для фиксированного набора офисов:
-         * Вороной по евклидову расстоянию, несколько политик навыков,
-         * добор чужих объектов с проверкой оболочек.
+         * Собирает решение для фиксированного набора офисов.
+         * Дешёвая сборка кластеризует по дорожной матрице. Thorough добавляет
+         * евклидов пул, рост оболочек и несколько политик навыков.
          */
         @SuppressWarnings("unchecked")
         Solution construct(int[] officeIds, boolean thorough) {
@@ -2211,9 +2293,10 @@ public class Main {
             }
             boolean heavy = thorough && assignmentHeavy();
             List<List<Cand>[]> pools = new ArrayList<>();
-            pools.add(clusterSites(oid, false));
+            // Дорога в дешёвом скорере: набор офисов выбирается до того, как кончится CPU.
+            pools.add(clusterSites(oid, true));
             if (thorough) {
-                pools.add(clusterSites(oid, true));
+                pools.add(clusterSites(oid, false));
                 if (heavy) {
                     pools.add(clusterCapped(oid, false));
                     pools.add(clusterCapped(oid, true));
@@ -2272,7 +2355,66 @@ public class Main {
             if (thorough && !bestLocal.offices.isEmpty()) {
                 rankNet.observeThorough(oid, bestLocal.objective);
             }
+            if (!thorough) {
+                noteCheap(bestLocal);
+            }
             return bestLocal;
+        }
+
+        /**
+         * Запоминает набор, который выиграла дешёвая сборка.
+         * В конце сравниваем его с итоговым: если часто разные, thorough смотрит не туда.
+         */
+        private void noteCheap(Solution sol) {
+            if (sol == null || sol.offices.isEmpty() || sol.objective <= cheapBestObj + 1e-9) {
+                return;
+            }
+            cheapBestObj = sol.objective;
+            cheapBestIds = idsOf(sol);
+        }
+
+        /** Сводка для LocalSuite: leftover, конфликт оболочек, расхождение наборов. */
+        private void publishDiag() {
+            int[] ids = best.offices.isEmpty() ? new int[0] : bestIds();
+            diagCheapThoroughDiffer = cheapBestIds != null && !Arrays.equals(cheapBestIds, ids);
+            diagOverlapPoints = acceptedOverlap;
+            diagLeftoverFrac = leftoverRoadFrac(best);
+        }
+
+        /**
+         * Доля маржи (reward − лучшая дорога), которая не попала ни в один офис.
+         * Ноль, если ни у одного объекта нет положительной маржи.
+         */
+        private double leftoverRoadFrac(Solution sol) {
+            boolean[] used = new boolean[inst.sites.length];
+            if (sol != null) {
+                for (OpenedOffice o : sol.offices) {
+                    for (int s : o.sites) {
+                        if (s >= 0 && s < used.length) {
+                            used[s] = true;
+                        }
+                    }
+                }
+            }
+            double pool = 0.0;
+            double left = 0.0;
+            for (int s = 0; s < inst.sites.length; s++) {
+                double marg = -1e100;
+                for (int j = 0; j < inst.offices.length; j++) {
+                    marg = Math.max(marg, inst.sites[s].reward - inst.distances[j][s]);
+                }
+                if (marg <= 1e-9) {
+                    continue;
+                }
+                pool += marg;
+                if (!used[s]) {
+                    left += marg;
+                }
+            }
+            if (pool <= 1e-9) {
+                return 0.0;
+            }
+            return left / pool;
         }
 
         /**
@@ -2300,7 +2442,7 @@ public class Main {
          * Назначение растёт по оболочкам, а не чинит Вороной. Сайт берём только
          * если новая оболочка не пересекается с уже открытыми.
          */
-        @SuppressWarnings("unchecked")
+        @SuppressWarnings({ "unchecked", "unused" })
         private Solution hullGrowSolve(int[] officeIds) {
             if (officeIds == null || officeIds.length == 0 || !timeLeft()) {
                 return Solution.empty();
@@ -2325,48 +2467,23 @@ public class Main {
                 capSum += inst.offices[oid[t]].maxSize;
             }
             int maxAdd = Math.min(inst.sites.length, capSum);
-            int candCap = inst.sites.length <= 80 ? inst.sites.length : 28;
             for (int round = 0; round < maxAdd && timeLeft(); round++) {
                 int bestS = -1;
                 int bestT = -1;
                 double bestV = 1e-12;
-                int[] sz = new int[k];
                 for (int t = 0; t < k; t++) {
-                    sz[t] = taken[t].size();
-                }
-                for (int t = 0; t < k; t++) {
-                    if (sz[t] >= inst.offices[oid[t]].maxSize) {
+                    if (taken[t].size() >= inst.offices[oid[t]].maxSize) {
                         continue;
                     }
-                    int tried = 0;
-                    for (int s = 0; s < inst.sites.length && tried < candCap; s++) {
-                        if (used[s] || !inst.siteFeasible(s) || !coveredBy(s, skills[t])) {
-                            continue;
-                        }
-                        double v = inst.sites[s].reward - inst.distances[oid[t]][s];
-                        if (v <= bestV) {
-                            continue;
-                        }
-                        tried++;
-                        sz[t]++;
-                        int minV = sz[0];
-                        int maxV = sz[0];
-                        for (int u = 1; u < k; u++) {
-                            minV = Math.min(minV, sz[u]);
-                            maxV = Math.max(maxV, sz[u]);
-                        }
-                        sz[t]--;
-                        if (maxV - minV > inst.maxDifference) {
-                            continue;
-                        }
-                        taken[t].add(candOf(oid[t], s));
-                        boolean geo = geometryAllows(oid, taken, t, hulls, covered);
-                        taken[t].remove(taken[t].size() - 1);
-                        if (geo && v > bestV) {
-                            bestV = v;
-                            bestS = s;
-                            bestT = t;
-                        }
+                    int s = bestGrowSite(oid, taken, skills[t], t, hulls, covered, used, bestV, false);
+                    if (s < 0) {
+                        continue;
+                    }
+                    double v = inst.sites[s].reward - inst.distances[oid[t]][s];
+                    if (v > bestV) {
+                        bestV = v;
+                        bestS = s;
+                        bestT = t;
                     }
                 }
                 if (bestS < 0) {
@@ -2408,47 +2525,9 @@ public class Main {
                 }
             }
             int cap = inst.offices[oid[tFocus]].maxSize;
-            int candCap = inst.sites.length <= 80 ? inst.sites.length : 28;
             int maxAdd = cap - taken[tFocus].size();
             for (int round = 0; round < maxAdd && timeLeft(); round++) {
-                int[] sz = new int[oid.length];
-                for (int t = 0; t < oid.length; t++) {
-                    sz[t] = taken[t].size();
-                }
-                int bestS = -1;
-                double bestV = 1e-12;
-                int tried = 0;
-                for (int s = 0; s < inst.sites.length && tried < candCap; s++) {
-                    if (used[s] || !inst.siteFeasible(s) || !coveredBy(s, skills[tFocus])) {
-                        continue;
-                    }
-                    double v = inst.sites[s].reward - inst.distances[oid[tFocus]][s];
-                    if (v <= bestV) {
-                        continue;
-                    }
-                    tried++;
-                    sz[tFocus]++;
-                    int lo = Integer.MAX_VALUE;
-                    int hi = 0;
-                    for (int u = 0; u < oid.length; u++) {
-                        if (sz[u] == 0) {
-                            continue;
-                        }
-                        lo = Math.min(lo, sz[u]);
-                        hi = Math.max(hi, sz[u]);
-                    }
-                    sz[tFocus]--;
-                    if (lo != Integer.MAX_VALUE && hi - lo > inst.maxDifference) {
-                        continue;
-                    }
-                    taken[tFocus].add(candOf(oid[tFocus], s));
-                    boolean geo = geometryAllows(oid, taken, tFocus, hulls, covered);
-                    taken[tFocus].remove(taken[tFocus].size() - 1);
-                    if (geo && v > bestV) {
-                        bestV = v;
-                        bestS = s;
-                    }
-                }
+                int bestS = bestGrowSite(oid, taken, skills[tFocus], tFocus, hulls, covered, used, 1e-12, true);
                 if (bestS < 0) {
                     break;
                 }
@@ -2457,6 +2536,98 @@ public class Main {
                 hulls[tFocus] = hullOf(oid[tFocus], taken[tFocus]);
                 covered[tFocus] = coverMask(hulls[tFocus]);
             }
+        }
+
+        /**
+         * Лучший по дороге сайт, который можно добавить в офис {@code t}, не ломая
+         * баланс числа объектов и чужие оболочки. Кандидаты отсортированы по
+         * (reward−dist): на большой карте смотрим лучшие, а не первые по индексу.
+         *
+         * @param skipEmptyInBalance пустые офисы не участвуют в |n_i−n_j| (доращивание одной зоны)
+         */
+        private int bestGrowSite(int[] oid, List<Cand>[] taken, BitSet skills, int t,
+                                 List<Vec>[] hulls, boolean[][] covered, boolean[] used,
+                                 double bestV, boolean skipEmptyInBalance) {
+            int[] ranked = sitesByRoadValue(oid[t], used, skills);
+            int baseCap = inst.sites.length <= 80 ? ranked.length : GROW_VALUE_CAP;
+            int firstEnd = Math.min(ranked.length, baseCap);
+            int secondEnd = inst.sites.length <= 80
+                    ? firstEnd
+                    : Math.min(ranked.length, baseCap * GROW_EXTEND_FACTOR);
+            int found = scanGrowWindow(oid, taken, t, hulls, covered, ranked, 0, firstEnd,
+                    bestV, skipEmptyInBalance);
+            if (found >= 0 || secondEnd <= firstEnd) {
+                return found;
+            }
+            return scanGrowWindow(oid, taken, t, hulls, covered, ranked, firstEnd, secondEnd,
+                    bestV, skipEmptyInBalance);
+        }
+
+        private int scanGrowWindow(int[] oid, List<Cand>[] taken, int t,
+                                   List<Vec>[] hulls, boolean[][] covered, int[] ranked,
+                                   int from, int to, double bestV, boolean skipEmptyInBalance) {
+            int[] sz = new int[oid.length];
+            for (int u = 0; u < oid.length; u++) {
+                sz[u] = taken[u].size();
+            }
+            for (int i = from; i < to; i++) {
+                int s = ranked[i];
+                double v = inst.sites[s].reward - inst.distances[oid[t]][s];
+                if (v <= bestV) {
+                    return -1;
+                }
+                sz[t]++;
+                int lo = Integer.MAX_VALUE;
+                int hi = 0;
+                for (int u = 0; u < oid.length; u++) {
+                    if (skipEmptyInBalance && sz[u] == 0) {
+                        continue;
+                    }
+                    lo = Math.min(lo, sz[u]);
+                    hi = Math.max(hi, sz[u]);
+                }
+                sz[t]--;
+                if (lo != Integer.MAX_VALUE && hi - lo > inst.maxDifference) {
+                    continue;
+                }
+                taken[t].add(candOf(oid[t], s));
+                boolean geo = geometryAllows(oid, taken, t, hulls, covered);
+                taken[t].remove(taken[t].size() - 1);
+                if (geo) {
+                    return s;
+                }
+            }
+            return -1;
+        }
+
+        /** Индексы ещё свободных объектов по убыванию (reward − дорога до офиса). */
+        private int[] sitesByRoadValue(int officeId, boolean[] used, BitSet skills) {
+            int n = inst.sites.length;
+            int[] idx = new int[n];
+            double[] val = new double[n];
+            int m = 0;
+            for (int s = 0; s < n; s++) {
+                if (used[s] || !inst.siteFeasible(s) || !coveredBy(s, skills)) {
+                    continue;
+                }
+                double v = inst.sites[s].reward - inst.distances[officeId][s];
+                if (v <= 1e-12) {
+                    continue;
+                }
+                idx[m] = s;
+                val[m] = v;
+                m++;
+            }
+            Integer[] order = new Integer[m];
+            for (int i = 0; i < m; i++) {
+                order[i] = i;
+            }
+            Arrays.sort(order, (a, b) -> Double.compare(val[b], val[a]));
+            int[] out = new int[m];
+            for (int i = 0; i < m; i++) {
+                out[i] = idx[order[i]];
+            }
+            return out;
         }
 
         @SuppressWarnings("unchecked")
@@ -3152,6 +3323,37 @@ public class Main {
             return Geometry.convexHull(raw);
         }
 
+        /** Вершины оболочки зоны. Внутренние точки площадь не задают. */
+        private boolean[] hullVertexFlags(int officeId, List<Cand> group) {
+            boolean[] flags = new boolean[group.size()];
+            List<Vec> hull = hullOf(officeId, group);
+            for (int i = 0; i < group.size(); i++) {
+                flags[i] = pointOnHull(inst.sites[group.get(i).site].pos, hull);
+            }
+            return flags;
+        }
+
+        private boolean pointOnHull(Vec point, List<Vec> hull) {
+            if (point == null || hull == null) {
+                return false;
+            }
+            for (Vec vertex : hull) {
+                if (Geometry.same(vertex, point)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private List<Vec> hullOfSites(int officeId, List<Integer> sites) {
+            List<Vec> raw = new ArrayList<>(sites.size() + 1);
+            raw.add(inst.offices[officeId].pos);
+            for (int site : sites) {
+                raw.add(inst.sites[site].pos);
+            }
+            return Geometry.convexHull(raw);
+        }
+
         private boolean[] coverMask(List<Vec> hull) {
             int n = inst.sites.length + inst.offices.length;
             boolean[] cov = new boolean[n];
@@ -3199,6 +3401,7 @@ public class Main {
             while (guard++ < RECOVER_GUARD && timeLeft()) {
                 List<Integer> rest = leftoverSites(oid, taken);
                 if (rest.isEmpty()) {
+                    tryShiftTasks(oid, taken, skills);
                     return;
                 }
                 if (admitDirect(oid, taken, skills, rest)
@@ -3208,6 +3411,7 @@ public class Main {
                 }
                 break;
             }
+            tryShiftTasks(oid, taken, skills);
         }
 
         private int leftoverRankCap() {
@@ -3356,22 +3560,17 @@ public class Main {
         }
 
         /**
-         * Leftover с навыком, которого нет у зоны: забираем навык у офиса,
-         * которому он сейчас не нужен, либо берём свободный слот skillSupply.
+         * Leftover с навыком, которого нет у зоны. Свободный слот skillSupply
+         * забираем сразу. Если навык занят, снимаем у донора дешёвые объекты,
+         * которым он нужен, и отдаём навык зоне с дорогим leftover.
          */
         private boolean admitWithSkillSteal(int[] oid, List<Cand>[] taken, BitSet[] skills,
                                             List<Integer> rest) {
-            List<Vec>[] hulls = currentHulls(oid, taken);
-            boolean[][] covered = new boolean[oid.length][];
-            for (int t = 0; t < oid.length; t++) {
-                if (hulls[t] != null) {
-                    covered[t] = coverMask(hulls[t]);
-                }
-            }
             double before = score(oid, taken);
             int bestS = -1;
             int bestT = -1;
             BitSet[] bestSkills = null;
+            List<int[]> bestDrops = null;
             double bestSc = before;
             int nTry = Math.min(rest.size(), compact() ? rest.size() : 48);
             for (int i = 0; i < nTry && timeLeft(); i++) {
@@ -3384,24 +3583,31 @@ public class Main {
                         continue;
                     }
                     BitSet[] trial = cloneSkills(skills);
-                    if (!giveSkillsToOffice(t, trial, taken, inst.sites[s].skillSet)) {
+                    List<int[]> drops = new ArrayList<>();
+                    double gain = inst.sites[s].reward - inst.distances[oid[t]][s];
+                    if (!releaseSkillsForLeftover(t, trial, taken, inst.sites[s].skillSet, gain, drops)) {
                         continue;
                     }
+                    List<SiteCut> cuts = applyDrops(taken, drops);
                     taken[t].add(candOf(oid[t], s));
-                    boolean geo = geometryAllows(oid, taken, t, hulls, covered);
-                    boolean work = geo && workersFeasible(oid, taken);
+                    boolean work = assignmentGeometryOk(oid, taken) && workersFeasible(oid, taken);
                     double sc = work ? score(oid, taken) : -1e100;
                     taken[t].remove(taken[t].size() - 1);
+                    revertDrops(taken, cuts);
                     if (work && sc > bestSc + 1e-9) {
                         bestSc = sc;
                         bestS = s;
                         bestT = t;
                         bestSkills = trial;
+                        bestDrops = drops;
                     }
                 }
             }
             if (bestS < 0 || bestSkills == null) {
                 return false;
+            }
+            if (bestDrops != null && !bestDrops.isEmpty()) {
+                applyDrops(taken, bestDrops);
             }
             for (int t = 0; t < skills.length; t++) {
                 skills[t] = bestSkills[t];
@@ -3410,15 +3616,27 @@ public class Main {
             return true;
         }
 
-        private BitSet[] cloneSkills(BitSet[] skills) {
-            BitSet[] copy = new BitSet[skills.length];
-            for (int i = 0; i < skills.length; i++) {
-                copy[i] = (BitSet) skills[i].clone();
+        /** Снятый с офиса объект: индекс нужен, чтобы вернуть пробный ход. */
+        private static final class SiteCut {
+            final int office;
+            final int index;
+            final Cand cand;
+
+            SiteCut(int office, int index, Cand cand) {
+                this.office = office;
+                this.index = index;
+                this.cand = cand;
             }
-            return copy;
         }
 
-        private boolean giveSkillsToOffice(int t, BitSet[] skills, List<Cand>[] taken, BitSet need) {
+        /**
+         * Отдаёт зоне {@code t} недостающие навыки. Если носитель уже сидит
+         * на объектах, в {@code drops} попадают их индексы — не больше
+         * {@link #SKILL_RELEASE_SITES} на навык, и только если их ценность
+         * меньше leftover с запасом на штраф α.
+         */
+        private boolean releaseSkillsForLeftover(int t, BitSet[] skills, List<Cand>[] taken, BitSet need,
+                                                 double leftoverValue, List<int[]> drops) {
             BitSet missing = (BitSet) need.clone();
             missing.andNot(skills[t]);
             for (int sk = missing.nextSetBit(0); sk >= 0; sk = missing.nextSetBit(sk + 1)) {
@@ -3445,11 +3663,92 @@ public class Main {
                         break;
                     }
                 }
-                if (!stole) {
+                if (stole) {
+                    continue;
+                }
+                int donor = -1;
+                List<Integer> users = null;
+                double bestLoss = Double.POSITIVE_INFINITY;
+                for (int u = 0; u < skills.length; u++) {
+                    if (u == t || !skills[u].get(sk)) {
+                        continue;
+                    }
+                    List<Integer> hit = skillUserIndexes(taken[u], sk);
+                    if (hit.isEmpty() || hit.size() > SKILL_RELEASE_SITES) {
+                        continue;
+                    }
+                    double loss = 0.0;
+                    int taskSum = 0;
+                    for (int j : hit) {
+                        loss += taken[u].get(j).value;
+                        taskSum += taken[u].get(j).tasks;
+                    }
+                    double allowance = leftoverValue + inst.balanceCoefficient * (taskSum + 1);
+                    if (loss >= allowance || loss >= bestLoss) {
+                        continue;
+                    }
+                    bestLoss = loss;
+                    donor = u;
+                    users = hit;
+                }
+                if (donor < 0 || users == null) {
                     return false;
                 }
+                for (int j : users) {
+                    drops.add(new int[]{donor, j});
+                }
+                skills[donor].clear(sk);
+                skills[t].set(sk);
             }
             return true;
+        }
+
+        private List<Integer> skillUserIndexes(List<Cand> group, int skill) {
+            List<Integer> hit = new ArrayList<>();
+            for (int j = 0; j < group.size(); j++) {
+                if (inst.sites[group.get(j).site].skillSet.get(skill)) {
+                    hit.add(j);
+                }
+            }
+            return hit;
+        }
+
+        private List<SiteCut> applyDrops(List<Cand>[] taken, List<int[]> drops) {
+            List<int[]> uniq = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            for (int[] d : drops) {
+                if (seen.add(d[0] + ":" + d[1])) {
+                    uniq.add(d);
+                }
+            }
+            uniq.sort((a, b) -> a[0] != b[0] ? Integer.compare(a[0], b[0]) : Integer.compare(b[1], a[1]));
+            List<SiteCut> cuts = new ArrayList<>();
+            for (int[] d : uniq) {
+                List<Cand> group = taken[d[0]];
+                if (d[1] < 0 || d[1] >= group.size()) {
+                    continue;
+                }
+                cuts.add(new SiteCut(d[0], d[1], group.remove(d[1])));
+            }
+            return cuts;
+        }
+
+        private void revertDrops(List<Cand>[] taken, List<SiteCut> cuts) {
+            cuts.sort((a, b) -> a.office != b.office
+                    ? Integer.compare(a.office, b.office)
+                    : Integer.compare(a.index, b.index));
+            for (SiteCut cut : cuts) {
+                int at = Math.min(cut.index, taken[cut.office].size());
+                taken[cut.office].add(at, cut.cand);
+            }
+        }
+
+        private BitSet[] cloneSkills(BitSet[] skills) {
+            BitSet[] copy = new BitSet[skills.length];
+            for (int i = 0; i < skills.length; i++) {
+                copy[i] = (BitSet) skills[i].clone();
+            }
+            return copy;
         }
 
         private boolean officeUsesSkill(List<Cand> group, int skill) {
@@ -3567,6 +3866,7 @@ public class Main {
             while (changed && guard++ < guardMax && timeLeft()) {
                 changed = tryCloseOffice(oid, taken)
                         || tryShiftToBalance(oid, taken, skills, true)
+                        || tryShiftTasks(oid, taken, skills)
                         || relocateBest(oid, taken, skills)
                         || swapBest(oid, taken, skills)
                         || insertLeftoversByKick(oid, taken, skills);
@@ -3653,6 +3953,77 @@ public class Main {
             }
             Cand c = taken[maxI].remove(bestJ);
             taken[minI].add(candOf(oid[minI], c.site));
+            return true;
+        }
+
+        /**
+         * Перенос объекта с большим числом задач из самого загруженного офиса
+         * в менее загруженный. Штраф α считается по задачам, а не по числу объектов,
+         * поэтому ход имеет смысл и когда |n_i−n_j| уже в пределах maxDifference.
+         */
+        private boolean tryShiftTasks(int[] oid, List<Cand>[] taken, BitSet[] skills) {
+            if (oid.length < 2 || inst.balanceCoefficient <= 0.0) {
+                return false;
+            }
+            int maxI = maxTaskCluster(taken);
+            if (maxI < 0 || taken[maxI].size() <= 1) {
+                return false;
+            }
+            int maxLoad = 0;
+            for (Cand c : taken[maxI]) {
+                maxLoad += c.tasks;
+            }
+            Integer[] order = new Integer[taken[maxI].size()];
+            for (int i = 0; i < order.length; i++) {
+                order[i] = i;
+            }
+            Arrays.sort(order, (a, b) -> {
+                int byTasks = Integer.compare(taken[maxI].get(b).tasks, taken[maxI].get(a).tasks);
+                if (byTasks != 0) {
+                    return byTasks;
+                }
+                return Double.compare(taken[maxI].get(a).value, taken[maxI].get(b).value);
+            });
+            int nTry = Math.min(order.length, TASK_SHIFT_CAP);
+            double cur = score(oid, taken);
+            int bestJ = -1;
+            int bestTo = -1;
+            double bestSc = cur;
+            for (int u = 0; u < oid.length && timeLeft(); u++) {
+                if (u == maxI || taken[u].isEmpty() || taken[u].size() >= inst.offices[oid[u]].maxSize) {
+                    continue;
+                }
+                int load = 0;
+                for (Cand c : taken[u]) {
+                    load += c.tasks;
+                }
+                if (load >= maxLoad) {
+                    continue;
+                }
+                for (int pos = 0; pos < nTry; pos++) {
+                    int j = order[pos];
+                    Cand c = taken[maxI].get(j);
+                    if (c.tasks <= 0 || !coveredBy(c.site, skills[u])) {
+                        continue;
+                    }
+                    taken[maxI].remove(j);
+                    taken[u].add(candOf(oid[u], c.site));
+                    boolean ok = assignmentGeometryOk(oid, taken) && workersFeasible(oid, taken);
+                    double sc = ok ? score(oid, taken) : -1e100;
+                    taken[u].remove(taken[u].size() - 1);
+                    taken[maxI].add(j, c);
+                    if (sc > bestSc + 1e-9) {
+                        bestSc = sc;
+                        bestJ = j;
+                        bestTo = u;
+                    }
+                }
+            }
+            if (bestJ < 0) {
+                return false;
+            }
+            Cand moved = taken[maxI].remove(bestJ);
+            taken[bestTo].add(candOf(oid[bestTo], moved.site));
             return true;
         }
 
@@ -3928,6 +4299,7 @@ public class Main {
             boolean any = false;
             int guard = 0;
             while (guard++ < inst.sites.length + 2) {
+                @SuppressWarnings("unused")
                 int minI = -1;
                 int maxI = -1;
                 int minV = Integer.MAX_VALUE;
@@ -4174,18 +4546,47 @@ public class Main {
             for (int i = 0; i < usedOff.size(); i++) {
                 opened.add(new OpenedOffice(usedOff.get(i), groups.get(i), workers[i]));
             }
+            int overlap = 0;
             if (opened.size() > 1 && !Constraints.valid(inst, opened)) {
+                overlap = overlapPointCount(opened);
                 opened = repairGeometry(opened);
                 if (opened.isEmpty() || !Constraints.valid(inst, opened)) {
                     return Solution.empty();
                 }
             }
-            return pack(opened);
+            return pack(opened, overlap);
+        }
+
+        /**
+         * Для maxDifference снимаем внутреннюю точку большого офиса.
+         * Вершина оболочки задаёт площадь: её снятие отпускает чужой leftover,
+         * а внутренняя точка на оболочку почти не влияет.
+         */
+        private int interiorDropIndex(int officeId, List<Integer> sites) {
+            List<Vec> hull = hullOfSites(officeId, sites);
+            int bestInterior = -1;
+            double worstInterior = Double.POSITIVE_INFINITY;
+            int bestAny = 0;
+            double worstAny = Double.POSITIVE_INFINITY;
+            for (int j = 0; j < sites.size(); j++) {
+                int site = sites.get(j);
+                double value = inst.sites[site].reward - inst.distances[officeId][site];
+                if (value < worstAny) {
+                    worstAny = value;
+                    bestAny = j;
+                }
+                if (!pointOnHull(inst.sites[site].pos, hull) && value < worstInterior) {
+                    worstInterior = value;
+                    bestInterior = j;
+                }
+            }
+            return bestInterior >= 0 ? bestInterior : bestAny;
         }
 
         private void enforceSiteBalance(List<Integer> officeIds, List<List<Integer>> groups) {
             int guard = 0;
             while (guard++ < inst.sites.length + 2 && !groups.isEmpty()) {
+                @SuppressWarnings("unused")
                 int minI = 0;
                 int maxI = 0;
                 int minV = groups.get(0).size();
@@ -4210,17 +4611,7 @@ public class Main {
                     groups.remove(maxI);
                     continue;
                 }
-                int dropAt = 0;
-                double worst = Double.POSITIVE_INFINITY;
-                int officeId = officeIds.get(maxI);
-                for (int j = 0; j < big.size(); j++) {
-                    int s = big.get(j);
-                    double v = inst.sites[s].reward - inst.distances[officeId][s];
-                    if (v < worst) {
-                        worst = v;
-                        dropAt = j;
-                    }
-                }
+                int dropAt = interiorDropIndex(officeIds.get(maxI), big);
                 big.remove(dropAt);
                 if (big.isEmpty()) {
                     officeIds.remove(maxI);
@@ -4230,61 +4621,187 @@ public class Main {
         }
 
         /**
-         * Если оболочки всё же пересеклись (численность / ничья Вороного),
-         * снимаем самый дальний объект у большего кластера.
+         * Снимает вершину оболочки, которая покрывает пересечение с другой зоной.
+         * Внутренняя точка конфликт не убирает. Если ни одна вершина не уменьшает
+         * пересечение, запасной шаг — самая дальняя точка самого большого кластера.
          */
         private List<OpenedOffice> repairGeometry(List<OpenedOffice> opened) {
             int guard = 0;
             while (guard++ < inst.sites.length && !opened.isEmpty() && !Constraints.valid(inst, opened)) {
-                int maxI = 0;
-                for (int i = 1; i < opened.size(); i++) {
-                    if (opened.get(i).sites.size() > opened.get(maxI).sites.size()) {
-                        maxI = i;
-                    }
+                int[] pick = overlapVertexToDrop(opened);
+                if (pick == null) {
+                    pick = farthestOfLargest(opened);
                 }
-                OpenedOffice o = opened.get(maxI);
-                if (o.sites.isEmpty()) {
-                    opened.remove(maxI);
+                if (pick == null) {
+                    break;
+                }
+                List<OpenedOffice> next = dropOpenedSite(opened, pick[0], pick[1]);
+                if (next == null) {
+                    opened.remove(pick[0]);
                     continue;
                 }
-                int far = 0;
-                double farD = -1;
-                for (int j = 0; j < o.sites.size(); j++) {
-                    double d = Geometry.euclid2(inst.sites[o.sites.get(j)].pos, inst.offices[o.officeId].pos);
-                    if (d > farD) {
-                        farD = d;
-                        far = j;
-                    }
-                }
-                List<Integer> nextSites = new ArrayList<>(o.sites);
-                nextSites.remove(far);
-                if (nextSites.isEmpty()) {
-                    opened.remove(maxI);
-                    continue;
-                }
-                BitSet need = skillsOf(nextSites);
-                List<Integer>[] w = allocateWorkers(new BitSet[]{need});
-                if (w == null) {
-                    opened.remove(maxI);
-                    continue;
-                }
-                opened.set(maxI, new OpenedOffice(o.officeId, nextSites, w[0]));
-                List<BitSet> needs = new ArrayList<>();
-                for (OpenedOffice x : opened) {
-                    needs.add(skillsOf(x.sites));
-                }
-                List<Integer>[] allW = allocateWorkers(needs.toArray(BitSet[]::new));
-                if (allW == null) {
-                    opened.remove(maxI);
-                    continue;
-                }
-                List<OpenedOffice> rebuilt = new ArrayList<>();
-                for (int i = 0; i < opened.size(); i++) {
-                    rebuilt.add(new OpenedOffice(opened.get(i).officeId, opened.get(i).sites, allW[i]));
-                }
-                opened = rebuilt;
+                opened = next;
             }
             return opened;
+        }
+
+        /** Сколько точек карты лежит сразу в двух и более оболочках. */
+        private int overlapPointCount(List<OpenedOffice> opened) {
+            int n = inst.sites.length + inst.offices.length;
+            int[] hits = new int[n];
+            for (OpenedOffice office : opened) {
+                boolean[] covered = coverMask(hullOfSites(office.officeId, office.sites));
+                for (int p = 0; p < n; p++) {
+                    if (covered[p]) {
+                        hits[p]++;
+                    }
+                }
+            }
+            int conflicts = 0;
+            for (int hit : hits) {
+                if (hit >= 2) {
+                    conflicts++;
+                }
+            }
+            return conflicts;
+        }
+
+        /**
+         * Вершина, снятие которой убирает больше всего точек пересечения.
+         * При равном выигрыше берём более дешёвую по (reward−dist).
+         */
+        private int[] overlapVertexToDrop(List<OpenedOffice> opened) {
+            int n = inst.sites.length + inst.offices.length;
+            List<boolean[]> covered = new ArrayList<>();
+            List<List<Vec>> hulls = new ArrayList<>();
+            for (OpenedOffice office : opened) {
+                List<Vec> hull = hullOfSites(office.officeId, office.sites);
+                hulls.add(hull);
+                covered.add(coverMask(hull));
+            }
+            boolean[] conflict = new boolean[n];
+            int conflictCount = 0;
+            for (int p = 0; p < n; p++) {
+                int hits = 0;
+                for (boolean[] mask : covered) {
+                    if (mask[p]) {
+                        hits++;
+                    }
+                }
+                if (hits >= 2) {
+                    conflict[p] = true;
+                    conflictCount++;
+                }
+            }
+            if (conflictCount == 0) {
+                return null;
+            }
+            int bestI = -1;
+            int bestJ = -1;
+            int bestRelief = 0;
+            double bestLoss = Double.POSITIVE_INFINITY;
+            for (int i = 0; i < opened.size(); i++) {
+                OpenedOffice office = opened.get(i);
+                List<Vec> hull = hulls.get(i);
+                for (int j = 0; j < office.sites.size(); j++) {
+                    int site = office.sites.get(j);
+                    if (!pointOnHull(inst.sites[site].pos, hull)) {
+                        continue;
+                    }
+                    List<Integer> nextSites = new ArrayList<>(office.sites);
+                    nextSites.remove(j);
+                    boolean[] nextCover = coverMask(hullOfSites(office.officeId, nextSites));
+                    int relief = 0;
+                    boolean[] was = covered.get(i);
+                    for (int p = 0; p < n; p++) {
+                        if (conflict[p] && was[p] && !nextCover[p]) {
+                            relief++;
+                        }
+                    }
+                    if (relief <= 0) {
+                        continue;
+                    }
+                    double loss = inst.sites[site].reward - inst.distances[office.officeId][site];
+                    if (relief > bestRelief || (relief == bestRelief && loss < bestLoss)) {
+                        bestRelief = relief;
+                        bestLoss = loss;
+                        bestI = i;
+                        bestJ = j;
+                    }
+                }
+            }
+            if (bestI < 0) {
+                return null;
+            }
+            return new int[]{bestI, bestJ};
+        }
+
+        /** Запасной съём, если пересечение не лечится одной вершиной. */
+        private int[] farthestOfLargest(List<OpenedOffice> opened) {
+            int maxI = 0;
+            for (int i = 1; i < opened.size(); i++) {
+                if (opened.get(i).sites.size() > opened.get(maxI).sites.size()) {
+                    maxI = i;
+                }
+            }
+            OpenedOffice office = opened.get(maxI);
+            if (office.sites.isEmpty()) {
+                return null;
+            }
+            int far = 0;
+            double farD = -1.0;
+            for (int j = 0; j < office.sites.size(); j++) {
+                double distance = Geometry.euclid2(inst.sites[office.sites.get(j)].pos,
+                        inst.offices[office.officeId].pos);
+                if (distance > farD) {
+                    farD = distance;
+                    far = j;
+                }
+            }
+            return new int[]{maxI, far};
+        }
+
+        /**
+         * Убирает один объект и заново сажает работников.
+         * Пустой офис из ответа выпадает. null — работников на оставшееся не хватило.
+         */
+        @SuppressWarnings("unchecked")
+        private List<OpenedOffice> dropOpenedSite(List<OpenedOffice> opened, int officeIndex, int siteIndex) {
+            if (officeIndex < 0 || officeIndex >= opened.size()) {
+                return null;
+            }
+            OpenedOffice office = opened.get(officeIndex);
+            if (siteIndex < 0 || siteIndex >= office.sites.size()) {
+                return null;
+            }
+            List<Integer> nextSites = new ArrayList<>(office.sites);
+            nextSites.remove(siteIndex);
+            List<OpenedOffice> draft = new ArrayList<>();
+            for (int i = 0; i < opened.size(); i++) {
+                if (i == officeIndex) {
+                    if (!nextSites.isEmpty()) {
+                        draft.add(new OpenedOffice(office.officeId, nextSites, office.workers));
+                    }
+                } else {
+                    draft.add(opened.get(i));
+                }
+            }
+            if (draft.isEmpty()) {
+                return draft;
+            }
+            List<BitSet> needs = new ArrayList<>();
+            for (OpenedOffice item : draft) {
+                needs.add(skillsOf(item.sites));
+            }
+            List<Integer>[] workers = allocateWorkers(needs.toArray(BitSet[]::new));
+            if (workers == null) {
+                return null;
+            }
+            List<OpenedOffice> rebuilt = new ArrayList<>();
+            for (int i = 0; i < draft.size(); i++) {
+                rebuilt.add(new OpenedOffice(draft.get(i).officeId, draft.get(i).sites, workers[i]));
+            }
+            return rebuilt;
         }
 
         private List<Integer> dropUntilCoverable(List<List<Integer>> groups, int idx) {
@@ -4368,7 +4885,7 @@ public class Main {
             return perOffice;
         }
 
-        private Solution pack(List<OpenedOffice> opened) {
+        private Solution pack(List<OpenedOffice> opened, int overlapBeforeRepair) {
             if (opened.isEmpty()) {
                 return Solution.empty();
             }
@@ -4389,7 +4906,7 @@ public class Main {
                 maxTasks = Math.max(maxTasks, tasks);
             }
             double obj = reward - distance - cost - inst.balanceCoefficient * (maxTasks - minTasks);
-            return new Solution(opened, obj);
+            return new Solution(opened, obj, overlapBeforeRepair);
         }
 
         private static long binom(int n, int k) {

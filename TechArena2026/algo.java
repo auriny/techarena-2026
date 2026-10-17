@@ -1,5 +1,3 @@
-package org.example.hackathons.TechArena2026;
-
 /**
  * Описание подхода к TechArena 2026 (обслуживание инфраструктуры).
  *

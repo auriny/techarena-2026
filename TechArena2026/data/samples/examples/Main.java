@@ -1,4 +1,4 @@
-package org.example.hackathons.TechArena2026.data.samples.examples;
+package data.samples.examples;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.TreeSet;
 
 /** Minimal working Java submission for TechArena Solver (model 20261). */
+@SuppressWarnings("unused")
 public class Main {
     static final class Json {
         static Object parse(String text) {
