@@ -698,11 +698,95 @@ class TrenchManager {
     }
 }
 
+let outBuf = Array<UInt8>(64, repeat: 0)
+
+func write2(a: Int64, b: Int64) {
+    var p = 0
+    var x = a
+    if (x == 0) {
+        outBuf[p] = 48
+        p += 1
+    } else {
+        let start = p
+        while (x > 0) {
+            outBuf[p] = UInt8(48 + (x % 10))
+            x /= 10
+            p += 1
+        }
+        var i = start
+        var j = p - 1
+        while (i < j) {
+            let tmp = outBuf[i]
+            outBuf[i] = outBuf[j]
+            outBuf[j] = tmp
+            i += 1
+            j -= 1
+        }
+    }
+    outBuf[p] = 32
+    p += 1
+    x = b
+    if (x == 0) {
+        outBuf[p] = 48
+        p += 1
+    } else {
+        let start = p
+        while (x > 0) {
+            outBuf[p] = UInt8(48 + (x % 10))
+            x /= 10
+            p += 1
+        }
+        var i = start
+        var j = p - 1
+        while (i < j) {
+            let tmp = outBuf[i]
+            outBuf[i] = outBuf[j]
+            outBuf[j] = tmp
+            i += 1
+            j -= 1
+        }
+    }
+    outBuf[p] = 10
+    p += 1
+    let sout = getStdOut()
+    sout.write(outBuf[0..p])
+    sout.flush()
+}
+
+func write1(a: Int64) {
+    var p = 0
+    var x = a
+    if (x == 0) {
+        outBuf[p] = 48
+        p += 1
+    } else {
+        let start = p
+        while (x > 0) {
+            outBuf[p] = UInt8(48 + (x % 10))
+            x /= 10
+            p += 1
+        }
+        var i = start
+        var j = p - 1
+        while (i < j) {
+            let tmp = outBuf[i]
+            outBuf[i] = outBuf[j]
+            outBuf[j] = tmp
+            i += 1
+            j -= 1
+        }
+    }
+    outBuf[p] = 10
+    p += 1
+    let sout = getStdOut()
+    sout.write(outBuf[0..p])
+    sout.flush()
+}
+
 main(): Int64 {
     let manager = TrenchManager()
     var pidCounter: Int64 = 0
     let input = getStdIn()
-    let output = getStdOut()
 
     while (true) {
         let optLine = input.readln()
@@ -722,13 +806,11 @@ main(): Int64 {
         if (cmd > 0) {
             pidCounter += 1
             let (n, d) = manager.allocate(pidCounter, cmd)
-            output.write("${n} ${d}\n".toArray())
-            output.flush()
+            write2(n, d)
         } else {
             let pid = -cmd
             let d = manager.free(pid)
-            output.write("${d}\n".toArray())
-            output.flush()
+            write1(d)
         }
     }
 
