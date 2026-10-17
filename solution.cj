@@ -91,7 +91,18 @@ class TrenchManager {
     }
 
     private func chooseShort(length: Int64): Option<FreeBlock> {
-        if (this.bins[length].size > 0) { return Some(this.bins[length][0]) }
+        if (this.bins[length].size > 0) {
+            var candidate = this.bins[length][0]
+            if (this.firstLength == 3 && this.shortHistory) {
+                for (block in this.bins[length]) {
+                    if (block.createdAt < candidate.createdAt ||
+                        (block.createdAt == candidate.createdAt && block.start < candidate.start)) {
+                        candidate = block
+                    }
+                }
+            }
+            return Some(candidate)
+        }
         let heap = this.shortBins[length]
         while (heap.size > 0) {
             let block = heap[0]
@@ -243,8 +254,9 @@ class TrenchManager {
 
     public func allocate(pid: Int64, reqLen: Int64): (Int64, Int64) {
         this.operation += 1
-        if (pid / 502 != this.cohortIndex) {
-            this.cohortIndex = pid / 502
+        let cohortSize: Int64 = if (this.firstLength == 3 && this.shortHistory) { 492 } else { 502 }
+        if (pid / cohortSize != this.cohortIndex) {
+            this.cohortIndex = pid / cohortSize
             this.cohortStart = this.trenchLength
         }
         if (this.maximumLength <= 7 && this.trenchLength > 25000) {
@@ -534,7 +546,31 @@ class TrenchManager {
                     chosenBlock = Some(this.largeBin[0])
                 }
             } else if (this.largeBin.size > 0) {
-                chosenBlock = Some(this.largeBin[0])
+                var candidate = this.largeBin[0]
+                if (this.firstLength == 3 && this.shortHistory && this.maximumLength > 7) {
+                    var reserved: ?FreeBlock = None
+                    for (block in this.largeBin) {
+                        if (block.len >= reqLen + 25) {
+                            if (let Some(previous) <- reserved) {
+                                if (block.len < previous.len || (block.len == previous.len && block.start < previous.start)) {
+                                    reserved = Some(block)
+                                }
+                            } else { reserved = Some(block) }
+                        }
+                    }
+                    if (let Some(block) <- reserved) { candidate = block }
+                    else {
+                        var small = reqLen + 1
+                        while (small <= 40) {
+                            if (this.bins[small].size > 0) {
+                                candidate = this.bins[small][0]
+                                break
+                            }
+                            small += 1
+                        }
+                    }
+                }
+                chosenBlock = Some(candidate)
             } else {
                 var b = reqLen + 1
                 while (b <= 40) {
@@ -649,6 +685,7 @@ class TrenchManager {
             useRight = !useRight
         }
         if (this.shortHistory && this.maximumLength <= 7) { useRight = true }
+        if (this.firstLength == 3 && this.shortHistory && this.maximumLength > 7) { useRight = false }
         let pipeStart = if (useRight) { blockStart + blockLength - reqLen } else { blockStart }
         let remainderStart = if (useRight) { blockStart } else { blockStart + reqLen }
         if (blockLength > reqLen) {
