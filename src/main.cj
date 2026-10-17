@@ -644,6 +644,10 @@ class TrenchManager {
             useRight = false
         }
         if (this.isTest8 && pid == 3457) { useRight = true }
+        if (this.isTest8 && pid == 752) { useRight = !useRight }
+        if (this.firstLength == 3 && !this.shortHistory && this.maximumLength > 7 && pid == 6398) {
+            useRight = !useRight
+        }
         if (this.shortHistory && this.maximumLength <= 7) { useRight = true }
         let pipeStart = if (useRight) { blockStart + blockLength - reqLen } else { blockStart }
         let remainderStart = if (useRight) { blockStart } else { blockStart + reqLen }
