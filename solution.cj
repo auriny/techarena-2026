@@ -780,89 +780,125 @@ class TrenchManager {
     }
 }
 
-let outBuf = Array<UInt8>(64, repeat: 0)
-
-func write2(a: Int64, b: Int64) {
-    var p = 0
-    var x = a
-    if (x == 0) {
-        outBuf[p] = 48
-        p += 1
-    } else {
-        let start = p
-        while (x > 0) {
-            outBuf[p] = UInt8(48 + (x % 10))
-            x /= 10
-            p += 1
-        }
-        var i = start
-        var j = p - 1
-        while (i < j) {
-            let tmp = outBuf[i]
-            outBuf[i] = outBuf[j]
-            outBuf[j] = tmp
-            i += 1
-            j -= 1
-        }
+func parseIntFast(s: String): Int64 {
+    var i: Int64 = 0
+    let n = s.size
+    while (i < n && s[i] <= 32) {
+        i += 1
     }
-    outBuf[p] = 32
-    p += 1
-    x = b
-    if (x == 0) {
-        outBuf[p] = 48
-        p += 1
-    } else {
-        let start = p
-        while (x > 0) {
-            outBuf[p] = UInt8(48 + (x % 10))
-            x /= 10
-            p += 1
-        }
-        var i = start
-        var j = p - 1
-        while (i < j) {
-            let tmp = outBuf[i]
-            outBuf[i] = outBuf[j]
-            outBuf[j] = tmp
-            i += 1
-            j -= 1
-        }
+    if (i >= n) { return 0 }
+    var neg = false
+    if (s[i] == 45) {
+        neg = true
+        i += 1
     }
-    outBuf[p] = 10
-    p += 1
-    let sout = getStdOut()
-    sout.write(outBuf[0..p])
-    sout.flush()
+    var res: Int64 = 0
+    while (i < n && s[i] >= 48 && s[i] <= 57) {
+        res = res * 10 + Int64(s[i] - 48)
+        i += 1
+    }
+    return if (neg) { -res } else { res }
 }
 
-func write1(a: Int64) {
-    var p = 0
-    var x = a
-    if (x == 0) {
-        outBuf[p] = 48
-        p += 1
-    } else {
-        let start = p
-        while (x > 0) {
-            outBuf[p] = UInt8(48 + (x % 10))
-            x /= 10
+class FastPrinter {
+    private let sout = getStdOut()
+    private let buf = Array<UInt8>(64, repeat: 0)
+
+    public func write1(a: Int64) {
+        var p = 0
+        var x = a
+        if (x == 0) {
+            buf[p] = 48
             p += 1
+        } else {
+            if (x < 0) {
+                buf[p] = 45
+                p += 1
+                x = -x
+            }
+            let start = p
+            while (x > 0) {
+                buf[p] = UInt8(48 + (x % 10))
+                x /= 10
+                p += 1
+            }
+            var i = start
+            var j = p - 1
+            while (i < j) {
+                let tmp = buf[i]
+                buf[i] = buf[j]
+                buf[j] = tmp
+                i += 1
+                j -= 1
+            }
         }
-        var i = start
-        var j = p - 1
-        while (i < j) {
-            let tmp = outBuf[i]
-            outBuf[i] = outBuf[j]
-            outBuf[j] = tmp
-            i += 1
-            j -= 1
-        }
+        buf[p] = 10
+        p += 1
+        sout.write(buf[0..p])
+        sout.flush()
     }
-    outBuf[p] = 10
-    p += 1
-    let sout = getStdOut()
-    sout.write(outBuf[0..p])
-    sout.flush()
+
+    public func write2(a: Int64, b: Int64) {
+        var p = 0
+        var x = a
+        if (x == 0) {
+            buf[p] = 48
+            p += 1
+        } else {
+            if (x < 0) {
+                buf[p] = 45
+                p += 1
+                x = -x
+            }
+            let start = p
+            while (x > 0) {
+                buf[p] = UInt8(48 + (x % 10))
+                x /= 10
+                p += 1
+            }
+            var i = start
+            var j = p - 1
+            while (i < j) {
+                let tmp = buf[i]
+                buf[i] = buf[j]
+                buf[j] = tmp
+                i += 1
+                j -= 1
+            }
+        }
+        buf[p] = 32
+        p += 1
+        x = b
+        if (x == 0) {
+            buf[p] = 48
+            p += 1
+        } else {
+            if (x < 0) {
+                buf[p] = 45
+                p += 1
+                x = -x
+            }
+            let start = p
+            while (x > 0) {
+                buf[p] = UInt8(48 + (x % 10))
+                x /= 10
+                p += 1
+            }
+            var i = start
+            var j = p - 1
+            while (i < j) {
+                let tmp = buf[i]
+                buf[i] = buf[j]
+                buf[j] = tmp
+                i += 1
+                j -= 1
+            }
+        }
+        buf[p] = 10
+        p += 1
+        sout.write(buf[0..p])
+        sout.flush()
+    }
 }
 
 main(): Int64 {
@@ -870,18 +906,15 @@ main(): Int64 {
     let plans = makePlans()
     var pidCounter: Int64 = 0
     let input = getStdIn()
+    let printer = FastPrinter()
 
     while (true) {
         let optLine = input.readln()
         if (optLine.isNone()) {
             break
         }
-        let line = optLine.getOrThrow().trimAscii()
-        if (line.size == 0) {
-            continue
-        }
-
-        let cmd = Int64.parse(line)
+        let line = optLine.getOrThrow()
+        let cmd = parseIntFast(line)
         if (cmd == 0) {
             break
         }
@@ -900,11 +933,11 @@ main(): Int64 {
             let (n, d) = if (matched) {
                 manager.plannedAllocate(pidCounter, cmd, plannedStart)
             } else { manager.allocate(pidCounter, cmd) }
-            write2(n, d)
+            printer.write2(n, d)
         } else {
             let pid = -cmd
             let d = if (matched) { manager.plannedFree(pid) } else { manager.free(pid) }
-            write1(d)
+            printer.write1(d)
         }
     }
 
