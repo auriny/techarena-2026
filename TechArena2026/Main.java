@@ -25,7 +25,7 @@ import java.util.Set;
  * объектов, покрытие навыков, непересекающиеся выпуклые оболочки (офис + объекты).
  *
  * Крупные скрытые: пары до 5000, затем выборка k=4/5 из остатка CPU.
- * Thorough — рост непересекающихся оболочек. Офисы add/drop по leftover.
+ * Thorough — рост оболочек по reward−dist, не по индексу объекта.
  * MLP прогнозирует зазор cheap→thorough. Навыки двигаются, чтобы взять leftover.
  */
 public class Main {
@@ -394,7 +394,10 @@ public class Main {
             return new Solution(List.of(), 0.0);
         }
 
-        /** Целевая как в validate_solution.py. */
+        /**
+         * Целевая как в validate_solution.py.
+         * Штраф α — по сумме len(tasks). Жёсткий maxDifference — по числу объектов, не по задачам.
+         */
         static double objectiveOf(Instance inst, List<OpenedOffice> opened) {
             if (opened.isEmpty()) {
                 return 0.0;
@@ -486,36 +489,31 @@ public class Main {
         private static final double EPS = 1e-12;
 
         static List<Vec> convexHull(List<Vec> points) {
-            List<Vec> filtered = new ArrayList<>();
-            for (Vec p : points) {
-                boolean dup = false;
-                for (Vec q : filtered) {
-                    if (same(p, q)) {
-                        dup = true;
-                        break;
-                    }
-                }
-                if (!dup) {
-                    filtered.add(p);
-                }
-            }
-            int n = filtered.size();
-            if (n <= 2) {
-                return filtered;
-            }
-            filtered.sort(Comparator
+            // Сначала сортировка, потом соседние дубликаты: попарное удаление было O(n²).
+            List<Vec> sorted = new ArrayList<>(points);
+            sorted.sort(Comparator
                     .comparingDouble((Vec p) -> p.x)
                     .thenComparingDouble(p -> p.y));
+            List<Vec> unique = new ArrayList<>(sorted.size());
+            for (Vec p : sorted) {
+                if (unique.isEmpty() || !same(unique.get(unique.size() - 1), p)) {
+                    unique.add(p);
+                }
+            }
+            int n = unique.size();
+            if (n <= 2) {
+                return unique;
+            }
             List<Vec> lower = new ArrayList<>();
-            for (Vec p : filtered) {
+            for (Vec p : unique) {
                 while (lower.size() >= 2 && cross(lower.get(lower.size() - 2), lower.get(lower.size() - 1), p) <= EPS) {
                     lower.remove(lower.size() - 1);
                 }
                 lower.add(p);
             }
             List<Vec> upper = new ArrayList<>();
-            for (int i = filtered.size() - 1; i >= 0; i--) {
-                Vec p = filtered.get(i);
+            for (int i = unique.size() - 1; i >= 0; i--) {
+                Vec p = unique.get(i);
                 while (upper.size() >= 2 && cross(upper.get(upper.size() - 2), upper.get(upper.size() - 1), p) <= EPS) {
                     upper.remove(upper.size() - 1);
                 }
@@ -627,10 +625,11 @@ public class Main {
                     }
                 }
             }
+            // maxDifference — число объектов. Штраф α в цели считается по числу задач.
             if (!opened.isEmpty() && maxSites - minSites > inst.maxDifference) {
                 return false;
             }
-            boolean[][] covered = new boolean[opened.size()][];
+            BitSet[] covered = new BitSet[opened.size()];
             for (int i = 0; i < opened.size(); i++) {
                 OpenedOffice o = opened.get(i);
                 List<Vec> raw = new ArrayList<>();
@@ -639,21 +638,23 @@ public class Main {
                     raw.add(inst.sites[s].pos);
                 }
                 List<Vec> hull = Geometry.convexHull(raw);
-                boolean[] mask = new boolean[nS + nO];
+                BitSet mask = new BitSet(nS + nO);
                 for (int s = 0; s < nS; s++) {
-                    mask[s] = Geometry.covers(hull, inst.sites[s].pos);
+                    if (Geometry.covers(hull, inst.sites[s].pos)) {
+                        mask.set(s);
+                    }
                 }
                 for (int j = 0; j < nO; j++) {
-                    mask[nS + j] = Geometry.covers(hull, inst.offices[j].pos);
+                    if (Geometry.covers(hull, inst.offices[j].pos)) {
+                        mask.set(nS + j);
+                    }
                 }
                 covered[i] = mask;
             }
             for (int i = 0; i < opened.size(); i++) {
                 for (int j = i + 1; j < opened.size(); j++) {
-                    for (int p = 0; p < nS + nO; p++) {
-                        if (covered[i][p] && covered[j][p]) {
-                            return false;
-                        }
+                    if (covered[i].intersects(covered[j])) {
+                        return false;
                     }
                 }
             }
@@ -717,6 +718,11 @@ public class Main {
         private int predictedK = 1;
         private int[] champIds;
         private double champObj = -1e100;
+        /** Евклид между офисами, один раз: в признаках пара считается многократно. */
+        private final double[][] officeEuclid;
+        /** Порядок officeSingle после одиночных сборок. До freezeSingles пусто. */
+        private int[] betterCount;
+        private double[] topPrefix;
 
         RankNet(Instance inst, double[] officeSingle) {
             this.inst = inst;
@@ -729,6 +735,53 @@ public class Main {
             this.diag = Math.max(1e-9, bboxDiagOffices(inst));
             this.siteDiag = Math.max(1e-9, bboxDiagSites(inst));
             this.scale = Math.max(1.0, totalReward / Math.max(1, inst.offices.length));
+            int nOff = inst.offices.length;
+            this.officeEuclid = new double[nOff][nOff];
+            for (int i = 0; i < nOff; i++) {
+                for (int j = i + 1; j < nOff; j++) {
+                    double d = Math.sqrt(Geometry.euclid2(inst.offices[i].pos, inst.offices[j].pos));
+                    officeEuclid[i][j] = d;
+                    officeEuclid[j][i] = d;
+                }
+            }
+        }
+
+        /**
+         * Одиночные цели больше не меняются. Дальше features не сортирует офисы заново.
+         */
+        void freezeSingles() {
+            int nOff = inst.offices.length;
+            Integer[] order = new Integer[nOff];
+            for (int o = 0; o < nOff; o++) {
+                order[o] = o;
+            }
+            Arrays.sort(order, (a, b) -> Double.compare(clampedSingle(b), clampedSingle(a)));
+            betterCount = new int[nOff];
+            topPrefix = new double[nOff + 1];
+            for (int i = 0; i < nOff; i++) {
+                topPrefix[i + 1] = topPrefix[i] + clampedSingle(order[i]);
+            }
+            for (int id = 0; id < nOff; id++) {
+                double s = officeSingle[id];
+                if (s < -1e90 || !Double.isFinite(s)) {
+                    s = 0.0;
+                }
+                int better = 0;
+                for (int o = 0; o < nOff; o++) {
+                    if (officeSingle[o] > s) {
+                        better++;
+                    }
+                }
+                betterCount[id] = better;
+            }
+        }
+
+        private double clampedSingle(int id) {
+            double s = officeSingle[id];
+            if (s < -1e90 || !Double.isFinite(s)) {
+                return 0.0;
+            }
+            return s;
         }
 
         void setPredictedK(int k) {
@@ -824,9 +877,11 @@ public class Main {
                 if (act.h[u] <= 0.0) {
                     continue;
                 }
+                double oldW2 = w2[u];
                 w2[u] -= LR * (err * act.h[u] + L2 * w2[u]);
                 clip(w2, u);
-                double dh = err * w2[u];
+                // Градиент скрытого слоя — по весу до шага, иначе backprop смотрит уже новое w2.
+                double dh = err * oldW2;
                 b1[u] -= LR * dh;
                 b1[u] = clipVal(b1[u]);
                 for (int d = 0; d < DIM; d++) {
@@ -882,12 +937,7 @@ public class Main {
                 sumCost += inst.offices[id].cost;
                 sumCap += inst.offices[id].maxSize;
                 minCap = Math.min(minCap, inst.offices[id].maxSize);
-                int better = 0;
-                for (int o = 0; o < nOff; o++) {
-                    if (officeSingle[o] > s) {
-                        better++;
-                    }
-                }
+                int better = betterCount == null ? countBetter(s) : betterCount[id];
                 if (better < topN) {
                     topHits++;
                 }
@@ -899,7 +949,7 @@ public class Main {
                 int pairs = 0;
                 for (int i = 0; i < k; i++) {
                     for (int j = i + 1; j < k; j++) {
-                        double d = Math.sqrt(Geometry.euclid2(inst.offices[ids[i]].pos, inst.offices[ids[j]].pos));
+                        double d = officeEuclid[ids[i]][ids[j]];
                         minPair = Math.min(minPair, d);
                         meanPair += d;
                         pairs++;
@@ -907,16 +957,7 @@ public class Main {
                 }
                 meanPair /= Math.max(1, pairs);
             }
-            double topK = 0;
-            Integer[] order = new Integer[nOff];
-            for (int o = 0; o < nOff; o++) {
-                order[o] = o;
-            }
-            Arrays.sort(order, (a, b) -> Double.compare(officeSingle[b], officeSingle[a]));
-            for (int i = 0; i < k && i < nOff; i++) {
-                double s = officeSingle[order[i]];
-                topK += (s < -1e90 || !Double.isFinite(s)) ? 0.0 : s;
-            }
+            double topK = topPrefix == null ? topKSum(k) : topPrefix[Math.min(k, nOff)];
             Double cheap = cheapOf.get(key(ids));
             double meanRw = totalReward / Math.max(1, nSites);
             double leftoverGap = 1.0 - Math.min(1.0, sumCap / Math.max(1.0, nSites));
@@ -941,6 +982,30 @@ public class Main {
             x[16] = hullRisk;
             x[17] = (topK - sumS) / (scale * Math.max(1, k));
             return x;
+        }
+
+        private int countBetter(double s) {
+            int better = 0;
+            for (int o = 0; o < inst.offices.length; o++) {
+                if (officeSingle[o] > s) {
+                    better++;
+                }
+            }
+            return better;
+        }
+
+        private double topKSum(int k) {
+            int nOff = inst.offices.length;
+            Integer[] order = new Integer[nOff];
+            for (int o = 0; o < nOff; o++) {
+                order[o] = o;
+            }
+            Arrays.sort(order, (a, b) -> Double.compare(clampedSingle(b), clampedSingle(a)));
+            double topK = 0;
+            for (int i = 0; i < k && i < nOff; i++) {
+                topK += clampedSingle(order[i]);
+            }
+            return topK;
         }
 
         static final class FitSample {
@@ -991,9 +1056,10 @@ public class Main {
                         if (h[u] <= 0.0) {
                             continue;
                         }
+                        double oldW2 = w2[u];
                         w2[u] -= LR * (err * h[u] + L2 * w2[u]);
                         w2[u] = clipVal(w2[u]);
-                        double dh = err * w2[u];
+                        double dh = err * oldW2;
                         b1[u] -= LR * dh;
                         b1[u] = clipVal(b1[u]);
                         for (int d = 0; d < DIM; d++) {
@@ -1155,6 +1221,15 @@ public class Main {
         private static final int WIDE_K4_CAP = 220;
         /** Выборка k=5 на крупной карте, после пар и четвёрок. */
         private static final int WIDE_K5_CAP = 80;
+        /**
+         * Рост оболочки на карте крупнее этого размера не сканирует все объекты:
+         * берёт верхние по reward−dist, иначе в зону попадают первые индексы.
+         */
+        private static final int GROW_FULL_SCAN_SITES = 80;
+        /** Геопроверок на офис за одно окно роста. */
+        private static final int GROW_WINDOW = 28;
+        /** Второе окно, если верхние объекты все конфликтуют оболочками. */
+        private static final int GROW_EXTRA_WINDOW = 28;
 
         private final Instance inst;
         private final long deadlineNanos;
@@ -1229,6 +1304,7 @@ public class Main {
                 rankNet.observe(new int[]{o}, sol.offices.isEmpty() ? 0.0 : sol.objective);
                 consider(sol);
             }
+            rankNet.freezeSingles();
             Arrays.sort(rank, (a, b) -> Double.compare(officeSingle[b], officeSingle[a]));
 
             int predicted = predictK(rank);
@@ -1334,6 +1410,7 @@ public class Main {
                 officeSingle[o] = sol.objective;
                 rankNet.observe(new int[]{o}, sol.offices.isEmpty() ? 0.0 : sol.objective);
             }
+            rankNet.freezeSingles();
             Arrays.sort(rank, (a, b) -> Double.compare(officeSingle[b], officeSingle[a]));
             rankNet.setPredictedK(Math.min(nOff, 3));
             int maxK = Math.min(nOff, Math.min(inst.workers.length, 5));
@@ -2335,18 +2412,23 @@ public class Main {
             }
             boolean[] used = new boolean[inst.sites.length];
             List<Vec>[] hulls = currentHulls(oid, taken);
-            boolean[][] covered = new boolean[k][];
+            BitSet[] covered = new BitSet[k];
             int capSum = 0;
             for (int t = 0; t < k; t++) {
                 capSum += inst.offices[oid[t]].maxSize;
             }
             int maxAdd = Math.min(inst.sites.length, capSum);
-            int candCap = inst.sites.length <= 80 ? inst.sites.length : 28;
+            int[][] ranked = rankSitesByRoad(oid);
+            // Пустой офис, который так и не смог взять объект, больше не держит
+            // остальные на расстоянии maxDifference от нуля.
+            boolean[] stalled = new boolean[k];
             for (int round = 0; round < maxAdd && timeLeft(); round++) {
                 int bestS = -1;
                 int bestT = -1;
                 double bestV = 1e-12;
                 int[] sz = new int[k];
+                boolean[] canAccept = new boolean[k];
+                boolean[] balanceHit = new boolean[k];
                 for (int t = 0; t < k; t++) {
                     sz[t] = taken[t].size();
                 }
@@ -2354,39 +2436,77 @@ public class Main {
                     if (sz[t] >= inst.offices[oid[t]].maxSize) {
                         continue;
                     }
+                    boolean emptyOffice = sz[t] == 0;
                     int tried = 0;
-                    for (int s = 0; s < inst.sites.length && tried < candCap; s++) {
+                    int limit = emptyOffice ? emptyGrowLimit() : growScanLimit(false);
+                    boolean hit = false;
+                    for (int pos = 0; pos < ranked[t].length && tried < limit; pos++) {
+                        int s = ranked[t][pos];
                         if (used[s] || !inst.siteFeasible(s) || !coveredBy(s, skills[t])) {
                             continue;
                         }
                         double v = inst.sites[s].reward - inst.distances[oid[t]][s];
+                        // Список убывает по ценности: дальше этого офиса лучше не будет.
                         if (v <= bestV) {
-                            continue;
+                            break;
                         }
                         tried++;
                         sz[t]++;
-                        int minV = sz[0];
-                        int maxV = sz[0];
-                        for (int u = 1; u < k; u++) {
-                            minV = Math.min(minV, sz[u]);
-                            maxV = Math.max(maxV, sz[u]);
-                        }
+                        boolean balanceOk = growBalanceOk(sz, stalled);
                         sz[t]--;
-                        if (maxV - minV > inst.maxDifference) {
+                        if (balanceOk) {
+                            balanceHit[t] = true;
+                        }
+                        if (!balanceOk) {
+                            if (!emptyOffice && tried == GROW_WINDOW && !hit) {
+                                limit = growScanLimit(true);
+                            }
                             continue;
                         }
                         taken[t].add(candOf(oid[t], s));
                         boolean geo = geometryAllows(oid, taken, t, hulls, covered);
                         taken[t].remove(taken[t].size() - 1);
+                        if (geo) {
+                            canAccept[t] = true;
+                        }
                         if (geo && v > bestV) {
                             bestV = v;
                             bestS = s;
                             bestT = t;
+                            hit = true;
+                        } else if (!emptyOffice && tried == GROW_WINDOW && !hit) {
+                            limit = growScanLimit(true);
                         }
                     }
                 }
                 if (bestS < 0) {
-                    break;
+                    boolean stalledNew = false;
+                    boolean waitingOnEmpty = false;
+                    for (int t = 0; t < k; t++) {
+                        if (sz[t] > 0 || stalled[t]) {
+                            continue;
+                        }
+                        if (balanceHit[t] && !canAccept[t]) {
+                            // Баланс пускает, оболочка — нет. Ноль больше не держит соседей.
+                            stalled[t] = true;
+                            stalledNew = true;
+                        } else if (!balanceHit[t]) {
+                            waitingOnEmpty = true;
+                        }
+                    }
+                    if (!stalledNew && waitingOnEmpty) {
+                        // Ни один объект не встаёт, пока пустые офисы сидят в балансе.
+                        for (int t = 0; t < k; t++) {
+                            if (sz[t] == 0 && !stalled[t]) {
+                                stalled[t] = true;
+                                stalledNew = true;
+                            }
+                        }
+                    }
+                    if (!stalledNew) {
+                        break;
+                    }
+                    continue;
                 }
                 taken[bestT].add(candOf(oid[bestT], bestS));
                 used[bestS] = true;
@@ -2410,6 +2530,14 @@ public class Main {
          * Доращивает одну зону leftover-объектами, не трогая уже назначенные.
          */
         private void growOneOffice(int[] oid, List<Cand>[] taken, BitSet[] skills, int tFocus) {
+            growOneOffice(oid, taken, skills, tFocus, -1);
+        }
+
+        /**
+         * banSite — объект, который в этом проходе возвращать в зону нельзя
+         * (только что снятая вершина оболочки).
+         */
+        private void growOneOffice(int[] oid, List<Cand>[] taken, BitSet[] skills, int tFocus, int banSite) {
             boolean[] used = new boolean[inst.sites.length];
             for (List<Cand> group : taken) {
                 for (Cand c : group) {
@@ -2417,14 +2545,14 @@ public class Main {
                 }
             }
             List<Vec>[] hulls = currentHulls(oid, taken);
-            boolean[][] covered = new boolean[oid.length][];
+            BitSet[] covered = new BitSet[oid.length];
             for (int t = 0; t < oid.length; t++) {
                 if (hulls[t] != null) {
                     covered[t] = coverMask(hulls[t]);
                 }
             }
             int cap = inst.offices[oid[tFocus]].maxSize;
-            int candCap = inst.sites.length <= 80 ? inst.sites.length : 28;
+            int[] ranked = rankSitesByRoad(oid[tFocus]);
             int maxAdd = cap - taken[tFocus].size();
             for (int round = 0; round < maxAdd && timeLeft(); round++) {
                 int[] sz = new int[oid.length];
@@ -2434,13 +2562,16 @@ public class Main {
                 int bestS = -1;
                 double bestV = 1e-12;
                 int tried = 0;
-                for (int s = 0; s < inst.sites.length && tried < candCap; s++) {
-                    if (used[s] || !inst.siteFeasible(s) || !coveredBy(s, skills[tFocus])) {
+                int limit = growScanLimit(false);
+                boolean hit = false;
+                for (int pos = 0; pos < ranked.length && tried < limit; pos++) {
+                    int s = ranked[pos];
+                    if (s == banSite || used[s] || !inst.siteFeasible(s) || !coveredBy(s, skills[tFocus])) {
                         continue;
                     }
                     double v = inst.sites[s].reward - inst.distances[oid[tFocus]][s];
                     if (v <= bestV) {
-                        continue;
+                        break;
                     }
                     tried++;
                     sz[tFocus]++;
@@ -2455,6 +2586,9 @@ public class Main {
                     }
                     sz[tFocus]--;
                     if (lo != Integer.MAX_VALUE && hi - lo > inst.maxDifference) {
+                        if (tried == GROW_WINDOW && !hit) {
+                            limit = growScanLimit(true);
+                        }
                         continue;
                     }
                     taken[tFocus].add(candOf(oid[tFocus], s));
@@ -2463,6 +2597,9 @@ public class Main {
                     if (geo && v > bestV) {
                         bestV = v;
                         bestS = s;
+                        hit = true;
+                    } else if (tried == GROW_WINDOW && !hit) {
+                        limit = growScanLimit(true);
                     }
                 }
                 if (bestS < 0) {
@@ -2473,6 +2610,69 @@ public class Main {
                 hulls[tFocus] = hullOf(oid[tFocus], taken[tFocus]);
                 covered[tFocus] = coverMask(hulls[tFocus]);
             }
+        }
+
+        /**
+         * Объекты по убыванию reward−dist к одному офису.
+         * Рост оболочки идёт по этому порядку, а не по индексу в инстансе.
+         */
+        private int[] rankSitesByRoad(int officeId) {
+            int n = inst.sites.length;
+            Integer[] order = new Integer[n];
+            for (int s = 0; s < n; s++) {
+                order[s] = s;
+            }
+            Arrays.sort(order, (a, b) -> Double.compare(
+                    inst.sites[b].reward - inst.distances[officeId][b],
+                    inst.sites[a].reward - inst.distances[officeId][a]));
+            int[] ranked = new int[n];
+            for (int i = 0; i < n; i++) {
+                ranked[i] = order[i];
+            }
+            return ranked;
+        }
+
+        private int[][] rankSitesByRoad(int[] oid) {
+            int[][] ranked = new int[oid.length][];
+            for (int t = 0; t < oid.length; t++) {
+                ranked[t] = rankSitesByRoad(oid[t]);
+            }
+            return ranked;
+        }
+
+        /** Полный список на мелкой карте, иначе одно или два окна. */
+        private int growScanLimit(boolean extraWindow) {
+            if (inst.sites.length <= GROW_FULL_SCAN_SITES) {
+                return inst.sites.length;
+            }
+            return extraWindow ? GROW_WINDOW + GROW_EXTRA_WINDOW : GROW_WINDOW;
+        }
+
+        /** Пустой офис ищет первый объект шире: иначе его легко признать мёртвым. */
+        private int emptyGrowLimit() {
+            if (inst.sites.length <= GROW_FULL_SCAN_SITES) {
+                return inst.sites.length;
+            }
+            return Math.min(inst.sites.length, GROW_WINDOW * 4);
+        }
+
+        /**
+         * Баланс числа объектов как в валидаторе: пустой и уже отбракованный офис
+         * в решение не входит и разницу не держит.
+         */
+        private boolean growBalanceOk(int[] sz, boolean[] stalled) {
+            int minV = Integer.MAX_VALUE;
+            int maxV = 0;
+            int opened = 0;
+            for (int u = 0; u < sz.length; u++) {
+                if (sz[u] == 0 && stalled[u]) {
+                    continue;
+                }
+                opened++;
+                minV = Math.min(minV, sz[u]);
+                maxV = Math.max(maxV, sz[u]);
+            }
+            return opened <= 1 || maxV - minV <= inst.maxDifference;
         }
 
         @SuppressWarnings("unchecked")
@@ -2685,7 +2885,7 @@ public class Main {
             }
             boolean[] used = new boolean[inst.sites.length];
             List<Vec>[] hulls = currentHulls(oid, taken);
-            boolean[][] covered = new boolean[k][];
+            BitSet[] covered = new BitSet[k];
             int guard = 0;
             int limit = inst.sites.length + 2;
             while (guard++ < limit) {
@@ -3112,7 +3312,7 @@ public class Main {
                 return Double.compare(vb, va);
             });
             List<Vec>[] hulls = currentHulls(oid, taken);
-            boolean[][] covered = new boolean[oid.length][];
+            BitSet[] covered = new BitSet[oid.length];
             for (int t = 0; t < oid.length; t++) {
                 if (hulls[t] != null) {
                     covered[t] = coverMask(hulls[t]);
@@ -3168,9 +3368,9 @@ public class Main {
             return Geometry.convexHull(raw);
         }
 
-        private boolean[] coverMask(List<Vec> hull) {
+        private BitSet coverMask(List<Vec> hull) {
             int n = inst.sites.length + inst.offices.length;
-            boolean[] cov = new boolean[n];
+            BitSet cov = new BitSet(n);
             if (hull == null || hull.isEmpty()) {
                 return cov;
             }
@@ -3190,14 +3390,18 @@ public class Main {
                 if (p.x + pad < minX || p.x - pad > maxX || p.y + pad < minY || p.y - pad > maxY) {
                     continue;
                 }
-                cov[i] = Geometry.covers(hull, p);
+                if (Geometry.covers(hull, p)) {
+                    cov.set(i);
+                }
             }
             for (int j = 0; j < inst.offices.length; j++) {
                 Vec p = inst.offices[j].pos;
                 if (p.x + pad < minX || p.x - pad > maxX || p.y + pad < minY || p.y - pad > maxY) {
                     continue;
                 }
-                cov[inst.sites.length + j] = Geometry.covers(hull, p);
+                if (Geometry.covers(hull, p)) {
+                    cov.set(inst.sites.length + j);
+                }
             }
             return cov;
         }
@@ -3261,7 +3465,7 @@ public class Main {
 
         private boolean admitDirect(int[] oid, List<Cand>[] taken, BitSet[] skills, List<Integer> rest) {
             List<Vec>[] hulls = currentHulls(oid, taken);
-            boolean[][] covered = new boolean[oid.length][];
+            BitSet[] covered = new BitSet[oid.length];
             for (int t = 0; t < oid.length; t++) {
                 if (hulls[t] != null) {
                     covered[t] = coverMask(hulls[t]);
@@ -3307,7 +3511,7 @@ public class Main {
                 return false;
             }
             List<Vec>[] hulls = currentHulls(oid, taken);
-            boolean[][] covered = new boolean[oid.length][];
+            BitSet[] covered = new BitSet[oid.length];
             for (int t = 0; t < oid.length; t++) {
                 if (hulls[t] != null) {
                     covered[t] = coverMask(hulls[t]);
@@ -3336,7 +3540,7 @@ public class Main {
                             continue;
                         }
                         List<Vec>[] hulls2 = currentHulls(oid, taken);
-                        boolean[][] cov2 = new boolean[oid.length][];
+                        BitSet[] cov2 = new BitSet[oid.length];
                         for (int u = 0; u < oid.length; u++) {
                             if (hulls2[u] != null) {
                                 cov2[u] = coverMask(hulls2[u]);
@@ -3378,7 +3582,7 @@ public class Main {
         private boolean admitWithSkillSteal(int[] oid, List<Cand>[] taken, BitSet[] skills,
                                             List<Integer> rest) {
             List<Vec>[] hulls = currentHulls(oid, taken);
-            boolean[][] covered = new boolean[oid.length][];
+            BitSet[] covered = new BitSet[oid.length];
             for (int t = 0; t < oid.length; t++) {
                 if (hulls[t] != null) {
                     covered[t] = coverMask(hulls[t]);
@@ -3580,13 +3784,87 @@ public class Main {
             int guard = 0;
             int guardMax = compact() ? 80 : 24;
             boolean changed = true;
+            boolean shedTried = false;
             while (changed && guard++ < guardMax && timeLeft()) {
                 changed = tryCloseOffice(oid, taken)
                         || tryShiftToBalance(oid, taken, skills, true)
                         || relocateBest(oid, taken, skills)
                         || swapBest(oid, taken, skills)
                         || insertLeftoversByKick(oid, taken, skills);
+                // Один раз за polish: снять дешёвую вершину оболочки и дорастить зоны.
+                if (!changed && compact() && !shedTried && timeLeft()) {
+                    shedTried = true;
+                    changed = shedBlockingVertex(oid, taken, skills);
+                }
             }
+        }
+
+        /**
+         * Вершина оболочки держит площадь зоны и часто накрывает чужой leftover.
+         * Снимаем до трёх самых дешёвых вершин по очереди, доращиваем зоны
+         * и оставляем вариант, только если цель выросла и ограничения живы.
+         * На крупных картах не вызывается: там дороже поиск набора офисов.
+         */
+        @SuppressWarnings("unchecked")
+        private boolean shedBlockingVertex(int[] oid, List<Cand>[] taken, BitSet[] skills) {
+            List<int[]> verts = new ArrayList<>();
+            for (int t = 0; t < oid.length; t++) {
+                if (taken[t].size() < 2) {
+                    continue;
+                }
+                List<Vec> hull = hullOf(oid[t], taken[t]);
+                for (int j = 0; j < taken[t].size(); j++) {
+                    Vec p = inst.sites[taken[t].get(j).site].pos;
+                    for (Vec h : hull) {
+                        if (Geometry.same(h, p)) {
+                            verts.add(new int[]{t, j});
+                            break;
+                        }
+                    }
+                }
+            }
+            if (verts.isEmpty()) {
+                return false;
+            }
+            verts.sort((a, b) -> Double.compare(
+                    taken[a[0]].get(a[1]).value,
+                    taken[b[0]].get(b[1]).value));
+            int trials = Math.min(3, verts.size());
+            List<Cand>[] origin = copyGroups(taken);
+            double cur = score(oid, taken);
+            List<Cand>[] bestTaken = null;
+            double bestSc = cur;
+            for (int i = 0; i < trials && timeLeft(); i++) {
+                restoreGroups(taken, origin);
+                int t = verts.get(i)[0];
+                int j = verts.get(i)[1];
+                if (j < 0 || j >= taken[t].size()) {
+                    continue;
+                }
+                int banned = taken[t].get(j).site;
+                taken[t].remove(j);
+                // Сначала чужие зоны: иначе снятая вершина сразу возвращается на место.
+                for (int u = 0; u < oid.length && timeLeft(); u++) {
+                    if (u == t) {
+                        continue;
+                    }
+                    growOneOffice(oid, taken, skills, u, banned);
+                }
+                growOneOffice(oid, taken, skills, t, banned);
+                if (assignmentGeometryOk(oid, taken) && workersFeasible(oid, taken)) {
+                    double sc = score(oid, taken);
+                    if (sc > bestSc + 1e-9) {
+                        bestSc = sc;
+                        bestTaken = copyGroups(taken);
+                    }
+                }
+            }
+            if (bestTaken == null) {
+                restoreGroups(taken, origin);
+                return false;
+            }
+            restoreGroups(taken, bestTaken);
+            return true;
         }
 
         private boolean tryCloseOffice(int[] oid, List<Cand>[] taken) {
@@ -3714,7 +3992,13 @@ public class Main {
         }
 
         private boolean swapBest(int[] oid, List<Cand>[] taken, BitSet[] skills) {
-            if (oid.length < 2 || inst.sites.length > 90) {
+            if (oid.length < 2) {
+                return false;
+            }
+            // Полный обмен только на мелкой карте. На compact режем число пар,
+            // иначе polish на тесте класса M не успевает.
+            int pairCap = inst.sites.length <= 90 ? Integer.MAX_VALUE : (compact() ? 8 : 0);
+            if (pairCap == 0) {
                 return false;
             }
             double cur = score(oid, taken);
@@ -3725,12 +4009,14 @@ public class Main {
                     if (taken[t].isEmpty() || taken[u].isEmpty()) {
                         continue;
                     }
-                    for (int i = 0; i < taken[t].size(); i++) {
+                    int[] topI = highestValueIndices(taken[t], pairCap);
+                    int[] topJ = highestValueIndices(taken[u], pairCap);
+                    for (int i : topI) {
                         Cand a = taken[t].get(i);
                         if (!coveredBy(a.site, skills[u])) {
                             continue;
                         }
-                        for (int j = 0; j < taken[u].size(); j++) {
+                        for (int j : topJ) {
                             Cand b = taken[u].get(j);
                             if (!coveredBy(b.site, skills[t])) {
                                 continue;
@@ -3762,27 +4048,43 @@ public class Main {
             return true;
         }
 
+        /** Индексы самых ценных объектов. При cap больше размера списка — все. */
+        private int[] highestValueIndices(List<Cand> list, int cap) {
+            int n = list.size();
+            if (cap >= n) {
+                int[] all = new int[n];
+                for (int i = 0; i < n; i++) {
+                    all[i] = i;
+                }
+                return all;
+            }
+            Integer[] order = new Integer[n];
+            for (int i = 0; i < n; i++) {
+                order[i] = i;
+            }
+            Arrays.sort(order, (a, b) -> Double.compare(list.get(b).value, list.get(a).value));
+            int[] top = new int[cap];
+            for (int i = 0; i < cap; i++) {
+                top[i] = order[i];
+            }
+            return top;
+        }
+
         private boolean assignmentGeometryOk(int[] oid, List<Cand>[] taken) {
             List<Vec>[] hulls = currentHulls(oid, taken);
-            boolean[][] covered = new boolean[oid.length][];
+            BitSet[] covered = new BitSet[oid.length];
             for (int t = 0; t < oid.length; t++) {
                 if (hulls[t] != null) {
                     covered[t] = coverMask(hulls[t]);
                 }
             }
-            int n = inst.sites.length + inst.offices.length;
             for (int i = 0; i < oid.length; i++) {
                 if (covered[i] == null) {
                     continue;
                 }
                 for (int j = i + 1; j < oid.length; j++) {
-                    if (covered[j] == null) {
-                        continue;
-                    }
-                    for (int p = 0; p < n; p++) {
-                        if (covered[i][p] && covered[j][p]) {
-                            return false;
-                        }
+                    if (covered[j] != null && covered[i].intersects(covered[j])) {
+                        return false;
                     }
                 }
             }
@@ -3808,18 +4110,11 @@ public class Main {
         }
 
         private boolean geometryAllows(int[] oid, List<Cand>[] taken, int t,
-                                       List<Vec>[] hulls, boolean[][] covered) {
-            List<Vec> hull = hullOf(oid[t], taken[t]);
-            boolean[] cov = coverMask(hull);
-            int n = inst.sites.length + inst.offices.length;
+                                       List<Vec>[] hulls, BitSet[] covered) {
+            BitSet cov = coverMask(hullOf(oid[t], taken[t]));
             for (int u = 0; u < oid.length; u++) {
-                if (u == t || covered[u] == null) {
-                    continue;
-                }
-                for (int p = 0; p < n; p++) {
-                    if (cov[p] && covered[u][p]) {
-                        return false;
-                    }
+                if (u != t && covered[u] != null && cov.intersects(covered[u])) {
+                    return false;
                 }
             }
             return true;
