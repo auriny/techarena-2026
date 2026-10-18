@@ -489,40 +489,57 @@ public class Main {
         private static final double EPS = 1e-12;
 
         static List<Vec> convexHull(List<Vec> points) {
-            // Сначала сортировка, потом соседние дубликаты: попарное удаление было O(n²).
-            List<Vec> sorted = new ArrayList<>(points);
-            sorted.sort(Comparator
-                    .comparingDouble((Vec p) -> p.x)
-                    .thenComparingDouble(p -> p.y));
-            List<Vec> unique = new ArrayList<>(sorted.size());
-            for (Vec p : sorted) {
-                if (unique.isEmpty() || !same(unique.get(unique.size() - 1), p)) {
-                    unique.add(p);
+            int nPoints = points.size();
+            if (nPoints <= 2) {
+                if (nPoints <= 1) {
+                    return new ArrayList<>(points);
+                }
+                if (same(points.get(0), points.get(1))) {
+                    List<Vec> u = new ArrayList<>(1);
+                    u.add(points.get(0));
+                    return u;
+                }
+                return new ArrayList<>(points);
+            }
+            Vec[] sorted = points.toArray(new Vec[nPoints]);
+            Arrays.sort(sorted, (a, b) -> {
+                int cmp = Double.compare(a.x, b.x);
+                return cmp != 0 ? cmp : Double.compare(a.y, b.y);
+            });
+            int uCount = 0;
+            for (int i = 0; i < nPoints; i++) {
+                if (uCount == 0 || !same(sorted[uCount - 1], sorted[i])) {
+                    sorted[uCount++] = sorted[i];
                 }
             }
-            int n = unique.size();
-            if (n <= 2) {
+            if (uCount <= 2) {
+                List<Vec> unique = new ArrayList<>(uCount);
+                for (int i = 0; i < uCount; i++) {
+                    unique.add(sorted[i]);
+                }
                 return unique;
             }
-            List<Vec> lower = new ArrayList<>();
-            for (Vec p : unique) {
-                while (lower.size() >= 2 && cross(lower.get(lower.size() - 2), lower.get(lower.size() - 1), p) <= EPS) {
-                    lower.remove(lower.size() - 1);
+            Vec[] stack = new Vec[2 * uCount];
+            int k = 0;
+            for (int i = 0; i < uCount; i++) {
+                Vec p = sorted[i];
+                while (k >= 2 && cross(stack[k - 2], stack[k - 1], p) <= EPS) {
+                    k--;
                 }
-                lower.add(p);
+                stack[k++] = p;
             }
-            List<Vec> upper = new ArrayList<>();
-            for (int i = unique.size() - 1; i >= 0; i--) {
-                Vec p = unique.get(i);
-                while (upper.size() >= 2 && cross(upper.get(upper.size() - 2), upper.get(upper.size() - 1), p) <= EPS) {
-                    upper.remove(upper.size() - 1);
+            for (int i = uCount - 2, t = k + 1; i >= 0; i--) {
+                Vec p = sorted[i];
+                while (k >= t && cross(stack[k - 2], stack[k - 1], p) <= EPS) {
+                    k--;
                 }
-                upper.add(p);
+                stack[k++] = p;
             }
-            lower.remove(lower.size() - 1);
-            upper.remove(upper.size() - 1);
-            lower.addAll(upper);
-            return lower;
+            List<Vec> res = new ArrayList<>(k - 1);
+            for (int i = 0; i < k - 1; i++) {
+                res.add(stack[i]);
+            }
+            return res;
         }
 
         static boolean covers(List<Vec> hull, Vec p) {
@@ -539,7 +556,8 @@ public class Main {
             boolean hasPos = false;
             boolean hasNeg = false;
             for (int i = 0; i < n; i++) {
-                double cr = cross(hull.get(i), hull.get((i + 1) % n), p);
+                int next = (i + 1 == n) ? 0 : (i + 1);
+                double cr = cross(hull.get(i), hull.get(next), p);
                 if (cr > EPS) {
                     hasPos = true;
                 } else if (cr < -EPS) {
@@ -630,33 +648,50 @@ public class Main {
                 return false;
             }
             BitSet[] covered = new BitSet[opened.size()];
+            double pad = 1e-9;
             for (int i = 0; i < opened.size(); i++) {
                 OpenedOffice o = opened.get(i);
-                List<Vec> raw = new ArrayList<>();
+                List<Vec> raw = new ArrayList<>(o.sites.size() + 1);
                 raw.add(inst.offices[o.officeId].pos);
                 for (int s : o.sites) {
                     raw.add(inst.sites[s].pos);
                 }
                 List<Vec> hull = Geometry.convexHull(raw);
                 BitSet mask = new BitSet(nS + nO);
-                for (int s = 0; s < nS; s++) {
-                    if (Geometry.covers(hull, inst.sites[s].pos)) {
-                        mask.set(s);
+                if (!hull.isEmpty()) {
+                    double minX = Double.POSITIVE_INFINITY, maxX = Double.NEGATIVE_INFINITY;
+                    double minY = Double.POSITIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY;
+                    for (Vec p : hull) {
+                        if (p.x < minX) minX = p.x;
+                        if (p.x > maxX) maxX = p.x;
+                        if (p.y < minY) minY = p.y;
+                        if (p.y > maxY) maxY = p.y;
+                    }
+                    for (int s = 0; s < nS; s++) {
+                        Vec p = inst.sites[s].pos;
+                        if (p.x + pad < minX || p.x - pad > maxX || p.y + pad < minY || p.y - pad > maxY) {
+                            continue;
+                        }
+                        if (Geometry.covers(hull, p)) {
+                            mask.set(s);
+                        }
+                    }
+                    for (int j = 0; j < nO; j++) {
+                        Vec p = inst.offices[j].pos;
+                        if (p.x + pad < minX || p.x - pad > maxX || p.y + pad < minY || p.y - pad > maxY) {
+                            continue;
+                        }
+                        if (Geometry.covers(hull, p)) {
+                            mask.set(nS + j);
+                        }
                     }
                 }
-                for (int j = 0; j < nO; j++) {
-                    if (Geometry.covers(hull, inst.offices[j].pos)) {
-                        mask.set(nS + j);
-                    }
-                }
-                covered[i] = mask;
-            }
-            for (int i = 0; i < opened.size(); i++) {
-                for (int j = i + 1; j < opened.size(); j++) {
-                    if (covered[i].intersects(covered[j])) {
+                for (int prev = 0; prev < i; prev++) {
+                    if (mask.intersects(covered[prev])) {
                         return false;
                     }
                 }
+                covered[i] = mask;
             }
             return true;
         }
@@ -1356,7 +1391,35 @@ public class Main {
                 // thoroughBestPerK входит в эту очередь, отдельно его не гоняем.
                 refineThorough(rank);
             }
+            if (!best.offices.isEmpty() && timeLeft()) {
+                best = polishSolution(best);
+            }
             return best;
+        }
+
+        @SuppressWarnings("unchecked")
+        private Solution polishSolution(Solution sol) {
+            if (sol == null || sol.offices.isEmpty() || !timeLeft()) {
+                return sol;
+            }
+            int k = sol.offices.size();
+            int[] oid = new int[k];
+            List<Cand>[] taken = new List[k];
+            BitSet[] skills = new BitSet[k];
+            for (int i = 0; i < k; i++) {
+                OpenedOffice o = sol.offices.get(i);
+                oid[i] = o.officeId;
+                taken[i] = new ArrayList<>(o.sites.size());
+                for (int s : o.sites) {
+                    taken[i].add(candOf(oid[i], s));
+                }
+                skills[i] = new BitSet();
+                for (int w : o.workers) {
+                    skills[i].or(inst.workerSkills[w]);
+                }
+            }
+            Solution polished = polishSafe(oid, taken, skills);
+            return (polished != null && polished.objective > sol.objective + 1e-9) ? polished : sol;
         }
 
         /** Малая карта: можно позволить polish/несколько thorough. */
@@ -3539,13 +3602,10 @@ public class Main {
                             taken[t1].remove(taken[t1].size() - 1);
                             continue;
                         }
-                        List<Vec>[] hulls2 = currentHulls(oid, taken);
-                        BitSet[] cov2 = new BitSet[oid.length];
-                        for (int u = 0; u < oid.length; u++) {
-                            if (hulls2[u] != null) {
-                                cov2[u] = coverMask(hulls2[u]);
-                            }
-                        }
+                        List<Vec>[] hulls2 = hulls.clone();
+                        hulls2[t1] = hullOf(oid[t1], taken[t1]);
+                        BitSet[] cov2 = covered.clone();
+                        cov2[t1] = coverMask(hulls2[t1]);
                         for (int j = 0; j < nTry; j++) {
                             int s2 = rest.get(j);
                             if (s2 == s1 || !coveredBy(s2, skills[t2])) {
@@ -4111,6 +4171,14 @@ public class Main {
 
         private boolean geometryAllows(int[] oid, List<Cand>[] taken, int t,
                                        List<Vec>[] hulls, BitSet[] covered) {
+            if (!taken[t].isEmpty()) {
+                int lastSite = taken[t].get(taken[t].size() - 1).site;
+                for (int u = 0; u < oid.length; u++) {
+                    if (u != t && covered[u] != null && covered[u].get(lastSite)) {
+                        return false;
+                    }
+                }
+            }
             BitSet cov = coverMask(hullOf(oid[t], taken[t]));
             for (int u = 0; u < oid.length; u++) {
                 if (u != t && covered[u] != null && cov.intersects(covered[u])) {
