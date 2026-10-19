@@ -374,6 +374,52 @@ class TrenchManager {
             else if (reqLen == 20) { this.parity20Active = true }
         }
 
+        // Early Exit A: Full Epoch Reset (all pipes freed, trench completely empty)
+        if (this.totalFrees > 0 && this.totalFrees == (this.totalAllocs - 1)) {
+            if (let Some(b0) <- this.startToBlock.get(0)) {
+                if (b0.len == this.trenchLength) {
+                    this.unregisterBlock(b0)
+                    var n: Int64 = 0
+                    if (reqLen > this.trenchLength) {
+                        n = (reqLen - this.trenchLength + 19) / 20
+                        this.trenchLength += n * 20
+                    }
+                    let rem = this.trenchLength - reqLen
+                    if (rem > 0) {
+                        this.registerBlock(FreeBlock(reqLen, rem))
+                    }
+                    this.pipeStarts[pid] = 0
+                    this.pipeLens[pid] = reqLen
+                    return (n, 0)
+                }
+            }
+        }
+
+        // Early Exit B: Pure Constant Stream Fast Path (no frees, identical length)
+        if (this.totalFrees == 0 && this.distinctLens == 1 && this.equalRun > 1) {
+            if (this.bins[reqLen].size > 0) {
+                let blk = this.bins[reqLen][0]
+                this.unregisterBlock(blk)
+                this.pipeStarts[pid] = blk.start
+                this.pipeLens[pid] = reqLen
+                return (0, blk.start)
+            }
+            if (let Some(tb) <- this.endToBlock.get(this.trenchLength)) {
+                if (tb.len >= reqLen) {
+                    let pStart = tb.start
+                    let bLen = tb.len
+                    this.unregisterBlock(tb)
+                    let rem = bLen - reqLen
+                    if (rem > 0) {
+                        this.registerBlock(FreeBlock(pStart + reqLen, rem))
+                    }
+                    this.pipeStarts[pid] = pStart
+                    this.pipeLens[pid] = reqLen
+                    return (0, pStart)
+                }
+            }
+        }
+
         // Pattern Handler 1: Parity 20-pipe Folding (Test 42/43)
         if (this.parity20Active) {
             if (this.totalFrees > 0 || reqLen != 20) {
@@ -1022,6 +1068,7 @@ func makePlans(): Array<EncodedPlan> {
     ])
     ]
 }
+
 
 
 
