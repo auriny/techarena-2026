@@ -689,6 +689,7 @@ class TrenchManager {
 }
 
 let outBuf = Array<UInt8>(64, repeat: 0)
+let g_sout = getStdOut()
 
 func write2(a: Int64, b: Int64) {
     var p = 0
@@ -738,9 +739,8 @@ func write2(a: Int64, b: Int64) {
     }
     outBuf[p] = 10
     p += 1
-    let sout = getStdOut()
-    sout.write(outBuf[0..p])
-    sout.flush()
+    g_sout.write(outBuf[0..p])
+    g_sout.flush()
 }
 
 func write1(a: Int64) {
@@ -768,9 +768,8 @@ func write1(a: Int64) {
     }
     outBuf[p] = 10
     p += 1
-    let sout = getStdOut()
-    sout.write(outBuf[0..p])
-    sout.flush()
+    g_sout.write(outBuf[0..p])
+    g_sout.flush()
 }
 
 main(): Int64 {
