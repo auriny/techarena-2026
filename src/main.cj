@@ -97,6 +97,7 @@ class TrenchManager {
     private var plannedState: Bool = false
 
     public func plannedAllocate(pid: Int64, length: Int64, start: Int64): (Int64, Int64) {
+        this.ensurePipeCapacity(pid)
         var n: Int64 = 0
         if (start + length > this.trenchLength) {
             n = (start + length - this.trenchLength + 19) / 20
@@ -109,6 +110,7 @@ class TrenchManager {
     }
 
     public func plannedFree(pid: Int64): Int64 {
+        if (pid >= this.pipeLens.size) { return 0 }
         this.pipeLens[pid] = 0
         return this.pipeStarts[pid]
     }
@@ -139,8 +141,22 @@ class TrenchManager {
     private let largeBin = ArrayList<FreeBlock>()
     private let largeAddressBin = ArrayList<FreeBlock>()
 
-    private let pipeStarts = Array<Int64>(200005, { _ => 0 })
-    private let pipeLens = Array<Int64>(200005, { _ => 0 })
+    private var pipeStarts = Array<Int64>(200005, { _ => 0 })
+    private var pipeLens = Array<Int64>(200005, { _ => 0 })
+
+    private func ensurePipeCapacity(pid: Int64) {
+        if (pid < this.pipeStarts.size) { return }
+        var newCap = this.pipeStarts.size * 2
+        while (newCap <= pid) { newCap *= 2 }
+        let newStarts = Array<Int64>(newCap, { _ => 0 })
+        let newLens = Array<Int64>(newCap, { _ => 0 })
+        for (i in 0..this.pipeStarts.size) {
+            newStarts[i] = this.pipeStarts[i]
+            newLens[i] = this.pipeLens[i]
+        }
+        this.pipeStarts = newStarts
+        this.pipeLens = newLens
+    }
 
     // Stream Analytics & Regime Classifier
     private var operation: Int64 = 0
@@ -340,6 +356,7 @@ class TrenchManager {
     }
 
     public func allocate(pid: Int64, reqLen: Int64): (Int64, Int64) {
+        this.ensurePipeCapacity(pid)
         this.operation += 1
         this.totalAllocs += 1
         this.updateAlphabet(reqLen)
@@ -649,6 +666,7 @@ class TrenchManager {
     }
 
     public func free(pid: Int64): Int64 {
+        if (pid >= this.pipeLens.size) { return 0 }
         this.operation += 1
         this.totalFrees += 1
         let pipeLen = this.pipeLens[pid]
@@ -1059,5 +1077,6 @@ func makePlans(): Array<EncodedPlan> {
     ])
     ]
 }
+
 
 
