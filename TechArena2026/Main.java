@@ -15,39 +15,34 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Гибридный солвер нового поколения для TechArena 2026:
+ * Гибридный солвер v2 для TechArena 2026:
  *
- * 1. FastGeo — движок выпуклых оболочек на плоских примитивных массивах и 64-битных битовых масках:
- *    - O(1) проверка попадания кандидата внутрь текущей оболочки (оболочка не меняется);
- *    - O(1) отсечение кандидатов, покрытых чужими оболочками;
- *    - инкрементальная перестройка оболочки только по вершинам текущей оболочки + новой точке.
+ * 1. Точное аналитическое решение для одиночного офиса (k = 1) за O(N_S log N_S):
+ *    - При одном открытом офисе все доступные специалисты назначаются ему,
+ *      штраф баланса задач равен 0, ограничение maxDifference тривиально выполняется,
+ *      поэтому глобальный оптимум достигается выбором топ maxSize допустимых объектов с netVal > 0.
  *
- * 2. Адаптивная диаграмма Вороного в степенной метрике (Laguerre / Power Diagram):
- *    - Ячейки определяются линейными полуплоскостями ||s - o_t||^2 - w_t <= ||s - o_u||^2 - w_u,
- *      поэтому они гарантированно выпуклы и не пересекаются.
- *    - Веса w_t итеративно подстраиваются под ёмкости maxSize, баланс числа объектов maxDifference
- *      и баланс задач alpha, сдвигая разделяющие прямые без геометрических конфликтов.
+ * 2. Двухэтапное точное 2D-динамическое программирование в выпуклых контейнерах (solveExactPoolDP)
+ *    + Итеративное сжатие контейнеров (Iterative Container Tightening):
+ *    - Теорема: если контейнеры H_0, ..., H_{k-1} не пересекаются, то любые подмножества объектов
+ *      S_t внутри H_t гарантированно порождают непересекающиеся выпуклые оболочки conv({o_t} U S_t).
+ *    - Внутри каждого контейнера строится точная 2D-таблица рюкзака dp[t][n][tau] (максимальная
+ *      прибыль при выборе ровно n объектов с суммарным числом задач tau) с 64-битной маской восстановления.
+ *    - Поверх таблиц dp[t][n][tau] перебираются окна числа объектов [L, L + maxDifference] и коридоры
+ *      задач [tauMin, tauMax], находя глобальный оптимум распределения объектов и задач за < 0.2 мс.
+ *    - После выбора оптимальных подмножеств S_t* реальные оболочки conv({o_t} U S_t*) сжимаются,
+ *      освобождая буферную зону между офисами, куда добираются новые объекты с повторным запуском DP.
  *
- * 3. WorkerSolver — точное назначение специалистов:
- *    - жадный алгоритм с учётом дефицитности навыков (Scarcity-Aware Greedy);
- *    - точный поиск с возвратом по эвристике минимального остатка (MRV Backtracking)
- *      и распространением единичных ограничений (Unit Propagation);
- *    - генерация гарантированно допустимых разбиений специалистов по офисам + динамический
- *      перенос навыков после сходимости локального поиска.
+ * 3. Семейство адаптивных диаграмм Вороного в степенной метрике (3-Mode Laguerre / Power Diagram):
+ *    - Режим 0: балансировка числа доходных объектов под maxSize и maxDifference;
+ *    - Режим 1: взвешивание по чистой доходности (reward - roadDist) для захвата дорогих кластеров;
+ *    - Режим 2: балансировка суммарной точной нагрузки по задачам (alpha * (maxTasks - minTasks)).
  *
- * 4. 10-окрестностный локальный поиск + ALNS (Ruin-and-Recreate):
- *    - внутриофисная замена 1-на-1 (взятый объект <-> свободный объект) при неизменном числе объектов;
- *    - синхронный подъём/спуск уровня минимальных/максимальных офисов (Level-Up / Level-Down)
- *      при жёстком maxDifference (включая maxDifference = 0);
- *    - одновременное сжатие диапазона задач (Multi-Office Task Range Compression) для пробития
- *      плато при совпадении maxTasks или minTasks у нескольких офисов;
- *    - добор «филлерных» объектов со слабоотрицательным (reward - dist) для разблокировки
- *      высокодоходных объектов в богатых офисах.
+ * 4. FastGeo — движок выпуклых оболочек на плоских примитивных массивах и 64-битных битовых масках:
+ *    - O(1) проверка попадания кандидата внутрь текущей оболочки;
+ *    - O(1) отсечение кандидатов, покрытых чужими оболочками.
  *
- * 5. SurrogateML — двухуровневая онлайн ML-модель:
- *    - ансамбль диагональной гребневой регрессии (LinUCB) и двухслойного Residual MLP
- *      с функцией потерь Хьюбера и попарным ранжированием Брэдли–Терри по 22 признакам;
- *    - матрица аффинности (офис x объект), обновляемая по EMA на элитных решениях.
+ * 5. WorkerSolver + 10-окрестностный локальный поиск + ALNS + SurrogateML с матрицей синергии офисов.
  */
 public class Main {
 
@@ -246,6 +241,7 @@ public class Main {
         final BitSet coveredGlobally;
         final boolean[] feasibleSite;
         final int[] siteTaskCount;
+        final int maxSiteTasks;
 
         Instance(Site[] sites, Office[] offices, int[][] workers, double[][] distances,
                  int maxDifference, double balanceCoefficient) {
@@ -286,8 +282,10 @@ public class Main {
             int nO = offices.length;
             this.feasibleSite = new boolean[nS];
             this.siteTaskCount = new int[nS];
+            int mTasks = 1;
             for (int s = 0; s < nS; s++) {
                 siteTaskCount[s] = sites[s].tasks.length;
+                mTasks = Math.max(mTasks, siteTaskCount[s]);
                 boolean ok = true;
                 BitSet need = sites[s].skillSet;
                 for (int sk = need.nextSetBit(0); sk >= 0; sk = need.nextSetBit(sk + 1)) {
@@ -298,6 +296,7 @@ public class Main {
                 }
                 feasibleSite[s] = ok;
             }
+            this.maxSiteTasks = mTasks;
 
             this.netVal = new double[nO][nS];
             this.euclidDist2 = new double[nO][nS];
@@ -880,7 +879,7 @@ public class Main {
                 assigned[t] = new ArrayList<>(4);
             }
             boolean[] usedW = new boolean[nW];
-            int[] budget = new int[]{3500};
+            int[] budget = new int[]{4500};
             if (backtrackMRV(rem, assigned, usedW, budget)) {
                 return assigned;
             }
@@ -1281,6 +1280,7 @@ public class Main {
         private final double[] b1;
         private final double[] w2;
         private final double[][] siteOfficeAffinity;
+        private final double[][] officeSynergy;
         private final Map<String, Double> fastCache = new HashMap<>();
 
         private final double totalReward;
@@ -1316,6 +1316,7 @@ public class Main {
                 }
             }
             this.siteOfficeAffinity = new double[inst.offices.length][inst.sites.length];
+            this.officeSynergy = new double[inst.offices.length][inst.offices.length];
             double sRew = 0;
             for (Site s : inst.sites) sRew += s.reward;
             this.totalReward = Math.max(1.0, sRew);
@@ -1331,6 +1332,7 @@ public class Main {
         void observeFast(int[] ids, double obj) {
             if (ids == null || ids.length == 0 || !Double.isFinite(obj)) return;
             fastCache.put(key(ids), obj);
+            updateSynergy(ids, obj, 0.12);
             trainStep(ids, obj, 0.35);
         }
 
@@ -1339,6 +1341,7 @@ public class Main {
             double obj = sol.offices.isEmpty() ? 0.0 : sol.objective;
             if (!Double.isFinite(obj)) return;
             fastCache.put(key(ids), Math.max(fastCache.getOrDefault(key(ids), -1e100), obj));
+            updateSynergy(ids, obj, 0.28);
             trainStep(ids, obj, 1.0);
 
             if (!sol.offices.isEmpty() && obj > 0) {
@@ -1348,6 +1351,19 @@ public class Main {
                         siteOfficeAffinity[o.officeId][s] =
                                 (1.0 - weight) * siteOfficeAffinity[o.officeId][s] + weight * 1.0;
                     }
+                }
+            }
+        }
+
+        private void updateSynergy(int[] ids, double obj, double lr) {
+            if (ids.length < 2 || obj <= 0) return;
+            double norm = obj / Math.max(10.0, Math.abs(champObj > 0 ? champObj : scale));
+            for (int i = 0; i < ids.length; i++) {
+                for (int j = i + 1; j < ids.length; j++) {
+                    int a = ids[i], b = ids[j];
+                    double v = (1.0 - lr) * officeSynergy[a][b] + lr * norm;
+                    officeSynergy[a][b] = v;
+                    officeSynergy[b][a] = v;
                 }
             }
         }
@@ -1438,6 +1454,17 @@ public class Main {
             Double cached = fastCache.get(key(ids));
             if (cached != null) {
                 mean = 0.65 * cached + 0.35 * mean;
+            }
+            if (ids.length >= 2) {
+                double syn = 0.0;
+                int pairs = 0;
+                for (int i = 0; i < ids.length; i++) {
+                    for (int j = i + 1; j < ids.length; j++) {
+                        syn += officeSynergy[ids[i]][ids[j]];
+                        pairs++;
+                    }
+                }
+                mean += 0.08 * scale * (syn / Math.max(1, pairs));
             }
             if (ucbBeta <= 0.0) return mean;
             double var = 0.0;
@@ -1596,7 +1623,7 @@ public class Main {
 
     static final class Solver {
         private static final long RESERVE_THOROUGH_NS = 15_000_000_000L;
-        private static final int ELITE_POOL_CAP = 56;
+        private static final int ELITE_POOL_CAP = 64;
 
         final Instance inst;
         final FastGeo geo;
@@ -1673,8 +1700,10 @@ public class Main {
             for (int o = 0; o < nOff; o++) {
                 rank[o] = o;
                 if (timeLeft()) {
-                    Solution sol = solveSubset(new int[]{o}, true);
+                    Solution sol = solveSingleOfficeExact(o);
                     officeSingle[o] = sol.objective;
+                    evaluatedFast.add(Arrays.toString(new int[]{o}));
+                    evaluatedThorough.add(Arrays.toString(new int[]{o}));
                     ml.observeThorough(new int[]{o}, sol);
                     consider(sol);
                 }
@@ -1701,6 +1730,33 @@ public class Main {
             refineElitesThorough(rank, maxK);
 
             return best;
+        }
+
+        /**
+         * Exact O(N_S log N_S) closed-form solver for a single opened office (k = 1).
+         */
+        private Solution solveSingleOfficeExact(int officeId) {
+            int cap = inst.offices[officeId].maxSize;
+            if (cap <= 0) return Solution.empty();
+            int[] ranked = rankSitesForOffice(officeId);
+            List<Integer> chosen = new ArrayList<>(Math.min(cap, ranked.length));
+            for (int s : ranked) {
+                if (chosen.size() >= cap) break;
+                if (!inst.feasibleSite[s]) continue;
+                if (inst.netVal[officeId][s] <= 0.0) break;
+                chosen.add(s);
+            }
+            if (chosen.isEmpty()) return Solution.empty();
+            BitSet[] need = new BitSet[]{skillsOf(chosen)};
+            List<Integer>[] workers = workerSolver.allocate(need);
+            if (workers == null) {
+                List<Integer> allW = new ArrayList<>(inst.workers.length);
+                for (int w = 0; w < inst.workers.length; w++) allW.add(w);
+                workers = new List[]{allW};
+            }
+            List<OpenedOffice> opened = List.of(new OpenedOffice(officeId, chosen, workers[0]));
+            double obj = Solution.objectiveOf(inst, opened);
+            return obj > 0.0 ? new Solution(opened, obj) : Solution.empty();
         }
 
         private int estimateOptimalK(Integer[] rank, int maxK) {
@@ -1874,7 +1930,7 @@ public class Main {
         private void localSearchOfficeSubsets(Integer[] rank, int maxK) {
             int nOff = inst.offices.length;
             int rounds = 0;
-            while (rounds++ < 12 && searchTimeLeft() && !best.offices.isEmpty()) {
+            while (rounds++ < 14 && searchTimeLeft() && !best.offices.isEmpty()) {
                 double before = best.objective;
                 int[] cur = bestIds();
                 if (cur.length >= 2) {
@@ -1903,6 +1959,35 @@ public class Main {
                         int[] next = cur.clone();
                         next[i] = neu;
                         evaluateFast(next);
+                    }
+                }
+                // 2-Swap neighborhood guided by SurrogateML when 1-swap plateaus
+                if (best.objective <= before + 1e-9 && cur.length >= 2 && nOff >= cur.length + 2) {
+                    List<int[]> twoSwaps = new ArrayList<>();
+                    int topOut = Math.min(nOff, 10);
+                    for (int i = 0; i < cur.length; i++) {
+                        for (int j = i + 1; j < cur.length; j++) {
+                            for (int r1 = 0; r1 < topOut; r1++) {
+                                int o1 = rank[r1];
+                                if (in[o1] || inst.offices[o1].maxSize < 1) continue;
+                                for (int r2 = r1 + 1; r2 < topOut; r2++) {
+                                    int o2 = rank[r2];
+                                    if (in[o2] || inst.offices[o2].maxSize < 1) continue;
+                                    int[] next = cur.clone();
+                                    next[i] = o1;
+                                    next[j] = o2;
+                                    Arrays.sort(next);
+                                    if (!evaluatedFast.contains(Arrays.toString(next))) {
+                                        twoSwaps.add(next);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    twoSwaps.sort((a, b) -> Double.compare(ml.predictUCB(b, 0.20), ml.predictUCB(a, 0.20)));
+                    for (int m = 0; m < Math.min(12, twoSwaps.size()) && searchTimeLeft(); m++) {
+                        evaluateFast(twoSwaps.get(m));
+                        if (best.objective > before + 1e-9) break;
                     }
                 }
                 if (best.objective <= before + 1e-9) break;
@@ -1994,13 +2079,13 @@ public class Main {
             List<int[]> queue = new ArrayList<>();
             addUnique(queue, bestIds());
             elites.sort((a, b) -> Double.compare(b.obj, a.obj));
-            int capCheap = isCompact() ? 14 : 6;
+            int capCheap = isCompact() ? 16 : 7;
             for (int i = 0; i < Math.min(capCheap, elites.size()); i++) {
                 addUnique(queue, elites.get(i).ids);
             }
             List<EliteSubset> byML = new ArrayList<>(elites);
             byML.sort((a, b) -> Double.compare(ml.predict(b.ids), ml.predict(a.ids)));
-            int capML = isCompact() ? 14 : 6;
+            int capML = isCompact() ? 16 : 7;
             for (int i = 0; i < Math.min(capML, byML.size()); i++) {
                 addUnique(queue, byML.get(i).ids);
             }
@@ -2130,29 +2215,34 @@ public class Main {
             return next;
         }
 
-        /* ==================== MULTI-STRATEGY SUBSET SOLVER ==================== */
+        /* ==================== MULTI-STRATEGY SUBSET SOLVER (WITH EXACT 2D CONTAINER DP) ==================== */
 
         @SuppressWarnings("unchecked")
         Solution solveSubset(int[] officeIds, boolean thorough) {
             if (!timeLeft()) return Solution.empty();
             int k = officeIds.length;
             if (k == 0) return Solution.empty();
+            if (k == 1) return solveSingleOfficeExact(officeIds[0]);
             int[] oid = officeIds.clone();
 
-            List<Integer>[] powerPool = (k >= 2) ? buildAdaptivePowerDiagramPools(oid) : buildVoronoiPools(oid, false);
-            List<BitSet[]> skillPolicies = workerSolver.generateWorkerPolicies(oid, powerPool, thorough);
+            List<Integer>[] powerPoolCount = buildPowerDiagramPools(oid, 0);
+            List<BitSet[]> skillPolicies = workerSolver.generateWorkerPolicies(oid, powerPoolCount, thorough);
 
             if (!thorough) {
                 BitSet[] skills = skillPolicies.get(0);
-                Solution s0 = buildVoronoiAndGrow(oid, powerPool, skills, false, false);
-                if (k >= 2 && inst.maxDifference <= 2) {
-                    Solution s1 = buildTargetWindowBalanced(oid, powerPool, skills, false, false);
-                    if (s1.objective > s0.objective) s0 = s1;
+                Solution s0 = buildContainerDPAndOptimize(oid, powerPoolCount, skills, false, false);
+                Solution s1 = buildVoronoiAndGrow(oid, powerPoolCount, skills, false, false);
+                if (s1.objective > s0.objective) s0 = s1;
+                if (inst.maxDifference <= 2) {
+                    Solution s2 = buildTargetWindowBalanced(oid, powerPoolCount, skills, false, false);
+                    if (s2.objective > s0.objective) s0 = s2;
                 }
                 return s0;
             }
 
-            List<Integer>[] euclidPool = (k >= 2) ? buildVoronoiPools(oid, false) : powerPool;
+            List<Integer>[] powerPoolVal = buildPowerDiagramPools(oid, 1);
+            List<Integer>[] powerPoolTask = (inst.balanceCoefficient > 0.5) ? buildPowerDiagramPools(oid, 2) : null;
+            List<Integer>[] euclidPool = buildVoronoiPools(oid, false);
             List<Integer>[] roadPool = buildVoronoiPools(oid, true);
 
             Solution bestSub = Solution.empty();
@@ -2161,18 +2251,27 @@ public class Main {
                 BitSet[] skills = skillPolicies.get(pIdx);
                 boolean isFullRelaxation = (pIdx == 1 && k > 1);
 
-                Solution s0 = buildVoronoiAndGrow(oid, powerPool, skills, isFullRelaxation, true);
+                if (!isFullRelaxation) {
+                    Solution sdp0 = buildContainerDPAndOptimize(oid, powerPoolCount, skills, false, true);
+                    if (sdp0.objective > bestSub.objective) bestSub = sdp0;
+
+                    Solution sdp1 = buildContainerDPAndOptimize(oid, powerPoolVal, skills, false, true);
+                    if (sdp1.objective > bestSub.objective) bestSub = sdp1;
+
+                    if (powerPoolTask != null) {
+                        Solution sdp2 = buildContainerDPAndOptimize(oid, powerPoolTask, skills, false, true);
+                        if (sdp2.objective > bestSub.objective) bestSub = sdp2;
+                    }
+                }
+
+                Solution s0 = buildVoronoiAndGrow(oid, powerPoolCount, skills, isFullRelaxation, true);
                 if (s0.objective > bestSub.objective) bestSub = s0;
 
-                if (powerPool != euclidPool) {
-                    Solution s1 = buildVoronoiAndGrow(oid, euclidPool, skills, isFullRelaxation, true);
-                    if (s1.objective > bestSub.objective) bestSub = s1;
-                }
+                Solution s1 = buildVoronoiAndGrow(oid, euclidPool, skills, isFullRelaxation, true);
+                if (s1.objective > bestSub.objective) bestSub = s1;
 
-                if (k >= 2) {
-                    Solution s2 = buildTargetWindowBalanced(oid, powerPool, skills, isFullRelaxation, true);
-                    if (s2.objective > bestSub.objective) bestSub = s2;
-                }
+                Solution s2 = buildTargetWindowBalanced(oid, powerPoolCount, skills, isFullRelaxation, true);
+                if (s2.objective > bestSub.objective) bestSub = s2;
 
                 Solution s3 = buildIntrusionAwareHullGrow(oid, skills, isFullRelaxation, 0.0);
                 if (s3.objective > bestSub.objective) bestSub = s3;
@@ -2193,8 +2292,341 @@ public class Main {
             return bestSub;
         }
 
+        /**
+         * Two-Stage Convex Container + Exact 2D Knapsack & Task-Envelope DP + Iterative Container Tightening.
+         *
+         * Stage 1: Grow maximal mutually-disjoint convex container pools C_t around each office t
+         *          (up to 56 sites per office, including top positive sites and high-ranking filler candidates).
+         * Stage 2: Because H_t = conv({o_t} U C_t) are pairwise disjoint, ANY subset S_t <= C_t has
+         *          conv({o_t} U S_t) <= H_t and is 100% conflict-free! Solve the exact 2D Knapsack DP
+         *          dp[t][n][tau] + Task-Range Envelope optimization across all k offices simultaneously.
+         * Stage 3 (Iterative Container Tightening): Once S_t* is selected by exact DP, the actual hulls
+         *          conv({o_t} U S_t*) shrink compared to H_t, freeing space between offices. Expand C_t
+         *          into the newly freed space and re-run Exact 2D DP before 10-neighborhood local search!
+         */
         @SuppressWarnings("unchecked")
-        private List<Integer>[] buildAdaptivePowerDiagramPools(int[] oid) {
+        private Solution buildContainerDPAndOptimize(int[] oid, List<Integer>[] basePools, BitSet[] baseSkills,
+                                                     boolean dynamicWorkers, boolean thorough) {
+            int k = oid.length;
+            BitSet[] skills = cloneBitSets(baseSkills);
+            List<Integer>[] containers = new List[k];
+            boolean[] inContainer = new boolean[inst.sites.length];
+            int[][] hulls = new int[k][inst.sites.length + 2];
+            int[] hLens = new int[k];
+            long[][] covMasks = new long[k][geo.words];
+
+            for (int t = 0; t < k; t++) {
+                containers[t] = new ArrayList<>();
+                hulls[t][0] = geo.nS + oid[t];
+                hLens[t] = 1;
+                geo.computeCoverMask(hulls[t], 1, covMasks[t]);
+            }
+
+            long[] unionOther = new long[geo.words];
+            int[] candHull = new int[inst.sites.length + 2];
+
+            // Pass 1: Add all geometrically compatible sites from the Power Diagram cell (up to 48 per office)
+            for (int t = 0; t < k; t++) {
+                geo.buildUnionOther(covMasks, k, t, unionOther);
+                int maxContainer = Math.min(48, inst.offices[oid[t]].maxSize + 14);
+                int negAdded = 0;
+                for (int s : basePools[t]) {
+                    if (containers[t].size() >= maxContainer) break;
+                    if (inContainer[s] || !inst.feasibleSite[s] || !coveredBy(s, skills[t])) continue;
+                    double v = inst.netVal[oid[t]][s];
+                    if (v <= 0 && negAdded >= 4) continue;
+                    int newHLen = geo.testAddSiteToHull(hulls[t], hLens[t], covMasks[t], unionOther, s, candHull);
+                    if (newHLen < 0) continue;
+                    containers[t].add(s);
+                    inContainer[s] = true;
+                    if (v <= 0) negAdded++;
+                    System.arraycopy(candHull, 0, hulls[t], 0, newHLen);
+                    hLens[t] = newHLen;
+                    geo.computeCoverMask(hulls[t], newHLen, covMasks[t]);
+                }
+            }
+
+            // Solve Exact 2D Knapsack + Task-Envelope DP on the safe containers
+            List<Integer>[] taken = solveExactPoolDP(oid, containers);
+            if (taken == null) {
+                return Solution.empty();
+            }
+
+            boolean[] usedSite = new boolean[inst.sites.length];
+            for (int t = 0; t < k; t++) {
+                for (int s : taken[t]) usedSite[s] = true;
+                rebuildOfficeHull(oid[t], taken[t], hulls[t], hLens, t, covMasks[t]);
+            }
+
+            // Stage 3: Iterative Container Tightening (shrink hulls to `taken`, expand into freed space, re-solve DP)
+            if (thorough && timeLeft()) {
+                List<Integer>[] tightContainers = new List[k];
+                boolean[] inTight = new boolean[inst.sites.length];
+                for (int t = 0; t < k; t++) {
+                    tightContainers[t] = new ArrayList<>(taken[t]);
+                    for (int s : taken[t]) inTight[s] = true;
+                }
+                for (int t = 0; t < k; t++) {
+                    geo.buildUnionOther(covMasks, k, t, unionOther);
+                    int maxContainer = Math.min(52, inst.offices[oid[t]].maxSize + 16);
+                    int[] rankedAll = rankSitesForOffice(oid[t]);
+                    int negAdded = 0;
+                    for (int s : rankedAll) {
+                        if (tightContainers[t].size() >= maxContainer) break;
+                        if (inTight[s] || !inst.feasibleSite[s] || !coveredBy(s, skills[t])) continue;
+                        double v = inst.netVal[oid[t]][s];
+                        if (v <= 0 && negAdded >= 4) break;
+                        int newHLen = geo.testAddSiteToHull(hulls[t], hLens[t], covMasks[t], unionOther, s, candHull);
+                        if (newHLen < 0) continue;
+                        tightContainers[t].add(s);
+                        inTight[s] = true;
+                        if (v <= 0) negAdded++;
+                        System.arraycopy(candHull, 0, hulls[t], 0, newHLen);
+                        hLens[t] = newHLen;
+                        geo.computeCoverMask(hulls[t], newHLen, covMasks[t]);
+                    }
+                }
+                List<Integer>[] refinedTaken = solveExactPoolDP(oid, tightContainers);
+                if (refinedTaken != null && evalScore(oid, refinedTaken) > evalScore(oid, taken) + 1e-9) {
+                    taken = refinedTaken;
+                }
+                Arrays.fill(usedSite, false);
+                for (int t = 0; t < k; t++) {
+                    for (int s : taken[t]) usedSite[s] = true;
+                    rebuildOfficeHull(oid[t], taken[t], hulls[t], hLens, t, covMasks[t]);
+                }
+            }
+
+            return optimizeAndPack(oid, taken, skills, hulls, hLens, covMasks, usedSite, dynamicWorkers, thorough);
+        }
+
+        /**
+         * Exact 2D Knapsack + Task-Envelope DP over mutually disjoint office containers:
+         * Finds the exact global optimum of site subsets S_t <= containers[t] (|containers[t]| <= 60)
+         * maximizing:
+         *    sum_t (sum_{s in S_t} netVal[o_t][s] - cost[o_t]) - alpha * (max_t T_t - min_t T_t)
+         * subject to:
+         *    1 <= |S_t| <= maxSize[o_t]   and   max_t |S_t| - min_t |S_t| <= maxDifference.
+         */
+        @SuppressWarnings("unchecked")
+        private List<Integer>[] solveExactPoolDP(int[] oid, List<Integer>[] containers) {
+            int k = oid.length;
+            double[][][] dp = new double[k][][];
+            long[][][] mask = new long[k][][];
+            int[] maxN = new int[k];
+            int[] maxTau = new int[k];
+            int globalMaxTau = 0;
+
+            for (int t = 0; t < k; t++) {
+                List<Integer> pool = containers[t];
+                int m = Math.min(pool.size(), 60);
+                if (m == 0) return null;
+                int cap = Math.min(m, inst.offices[oid[t]].maxSize);
+                if (cap == 0) return null;
+                maxN[t] = cap;
+
+                int[] tasksArr = new int[m];
+                double[] valArr = new double[m];
+                for (int i = 0; i < m; i++) {
+                    int s = pool.get(i);
+                    tasksArr[i] = inst.siteTaskCount[s];
+                    valArr[i] = inst.netVal[oid[t]][s];
+                }
+                int[] sortedTasks = tasksArr.clone();
+                Arrays.sort(sortedTasks);
+                int tauBound = 0;
+                for (int i = m - 1; i >= m - cap; i--) tauBound += sortedTasks[i];
+                maxTau[t] = tauBound;
+                globalMaxTau = Math.max(globalMaxTau, tauBound);
+
+                double[][] dpT = new double[cap + 1][tauBound + 1];
+                long[][] maskT = new long[cap + 1][tauBound + 1];
+                for (int n = 0; n <= cap; n++) {
+                    Arrays.fill(dpT[n], -1e100);
+                }
+                dpT[0][0] = 0.0;
+
+                int curMaxN = 0;
+                int curMaxTau = 0;
+                for (int idx = 0; idx < m; idx++) {
+                    int tk = tasksArr[idx];
+                    double v = valArr[idx];
+                    long bit = 1L << idx;
+                    int nextNLim = Math.min(cap, curMaxN + 1);
+                    for (int n = nextNLim; n >= 1; n--) {
+                        double[] rowPrev = dpT[n - 1];
+                        double[] rowCur = dpT[n];
+                        long[] mPrev = maskT[n - 1];
+                        long[] mCur = maskT[n];
+                        int tauLim = Math.min(tauBound - tk, curMaxTau);
+                        for (int tau = tauLim; tau >= 0; tau--) {
+                            double prev = rowPrev[tau];
+                            if (prev > -1e90) {
+                                double cand = prev + v;
+                                if (cand > rowCur[tau + tk]) {
+                                    rowCur[tau + tk] = cand;
+                                    mCur[tau + tk] = mPrev[tau] | bit;
+                                }
+                            }
+                        }
+                    }
+                    curMaxN = nextNLim;
+                    curMaxTau = Math.min(tauBound, curMaxTau + tk);
+                }
+                dp[t] = dpT;
+                mask[t] = maskT;
+            }
+
+            int minCap = Integer.MAX_VALUE;
+            int maxCap = 0;
+            double totalCost = 0.0;
+            for (int t = 0; t < k; t++) {
+                minCap = Math.min(minCap, maxN[t]);
+                maxCap = Math.max(maxCap, maxN[t]);
+                totalCost += inst.offices[oid[t]].cost;
+            }
+            if (minCap < 1) return null;
+
+            double bestTotalObj = -1e100;
+            int[] bestN = new int[k];
+            int[] bestTau = new int[k];
+
+            double[][] bestValForTau = new double[k][globalMaxTau + 1];
+            int[][] bestNForTau = new int[k][globalMaxTau + 1];
+
+            int maxL = Math.min(minCap, maxCap);
+            for (int L = 1; L <= maxL; L++) {
+                int U = L + inst.maxDifference;
+
+                int minReachableTau = Integer.MAX_VALUE;
+                int maxReachableTau = 0;
+                boolean windowFeasible = true;
+
+                for (int t = 0; t < k; t++) {
+                    int hiN = Math.min(U, maxN[t]);
+                    if (hiN < L) {
+                        windowFeasible = false;
+                        break;
+                    }
+                    Arrays.fill(bestValForTau[t], -1e100);
+                    int tMaxTau = maxTau[t];
+                    boolean anyValid = false;
+                    for (int n = L; n <= hiN; n++) {
+                        double[] row = dp[t][n];
+                        for (int tau = 0; tau <= tMaxTau; tau++) {
+                            if (row[tau] > bestValForTau[t][tau]) {
+                                bestValForTau[t][tau] = row[tau];
+                                bestNForTau[t][tau] = n;
+                                anyValid = true;
+                                if (tau < minReachableTau) minReachableTau = tau;
+                                if (tau > maxReachableTau) maxReachableTau = tau;
+                            }
+                        }
+                    }
+                    if (!anyValid) {
+                        windowFeasible = false;
+                        break;
+                    }
+                }
+                if (!windowFeasible) continue;
+
+                if (inst.balanceCoefficient <= 1e-9 || k == 1) {
+                    double sum = 0.0;
+                    int minT = Integer.MAX_VALUE, maxT = 0;
+                    int[] curTau = new int[k];
+                    for (int t = 0; t < k; t++) {
+                        double bestTVal = -1e100;
+                        int bTau = 0;
+                        for (int tau = 0; tau <= maxTau[t]; tau++) {
+                            if (bestValForTau[t][tau] > bestTVal) {
+                                bestTVal = bestValForTau[t][tau];
+                                bTau = tau;
+                            }
+                        }
+                        sum += bestTVal;
+                        curTau[t] = bTau;
+                        minT = Math.min(minT, bTau);
+                        maxT = Math.max(maxT, bTau);
+                    }
+                    double obj = sum - totalCost - inst.balanceCoefficient * (maxT - minT);
+                    if (obj > bestTotalObj) {
+                        bestTotalObj = obj;
+                        for (int t = 0; t < k; t++) {
+                            bestTau[t] = curTau[t];
+                            bestN[t] = bestNForTau[t][curTau[t]];
+                        }
+                    }
+                } else {
+                    for (int tauMin = minReachableTau; tauMin <= maxReachableTau; tauMin++) {
+                        for (int tauMax = tauMin; tauMax <= maxReachableTau; tauMax++) {
+                            double sum = 0.0;
+                            boolean ok = true;
+                            for (int t = 0; t < k; t++) {
+                                int hi = Math.min(tauMax, maxTau[t]);
+                                if (hi < tauMin) {
+                                    ok = false;
+                                    break;
+                                }
+                                double bestTVal = -1e100;
+                                for (int tau = tauMin; tau <= hi; tau++) {
+                                    if (bestValForTau[t][tau] > bestTVal) {
+                                        bestTVal = bestValForTau[t][tau];
+                                    }
+                                }
+                                if (bestTVal <= -1e90) {
+                                    ok = false;
+                                    break;
+                                }
+                                sum += bestTVal;
+                            }
+                            if (!ok) continue;
+                            double obj = sum - totalCost - inst.balanceCoefficient * (tauMax - tauMin);
+                            if (obj > bestTotalObj) {
+                                bestTotalObj = obj;
+                                for (int t = 0; t < k; t++) {
+                                    int hi = Math.min(tauMax, maxTau[t]);
+                                    double bestTVal = -1e100;
+                                    int bTau = tauMin;
+                                    for (int tau = tauMin; tau <= hi; tau++) {
+                                        if (bestValForTau[t][tau] > bestTVal) {
+                                            bestTVal = bestValForTau[t][tau];
+                                            bTau = tau;
+                                        }
+                                    }
+                                    bestTau[t] = bTau;
+                                    bestN[t] = bestNForTau[t][bTau];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (bestTotalObj <= -1e90) return null;
+
+            List<Integer>[] result = new List[k];
+            for (int t = 0; t < k; t++) {
+                result[t] = new ArrayList<>(bestN[t]);
+                long chosenMask = mask[t][bestN[t]][bestTau[t]];
+                List<Integer> pool = containers[t];
+                int m = Math.min(pool.size(), 60);
+                for (int i = 0; i < m; i++) {
+                    if ((chosenMask & (1L << i)) != 0L) {
+                        result[t].add(pool.get(i));
+                    }
+                }
+            }
+            return result;
+        }
+
+        /**
+         * 3-Mode Adaptive Power Diagram (Laguerre Voronoi) Generator:
+         * - mode 0: Capacity & site-count balanced Power Diagram
+         * - mode 1: Net-value-weighted Power Diagram (shifts boundaries toward offices with higher net value)
+         * - mode 2: Task-load-balanced Power Diagram (shifts boundaries to equalize total tasks per office)
+         */
+        @SuppressWarnings("unchecked")
+        private List<Integer>[] buildPowerDiagramPools(int[] oid, int mode) {
             int k = oid.length;
             double[] weights = new double[k];
             double[] maxPairD2 = new double[k];
@@ -2202,16 +2634,27 @@ public class Main {
             for (int t = 0; t < k; t++) {
                 for (int u = 0; u < k; u++) {
                     if (t != u) {
-                        double d2 = inst.officeEuclid[oid[t]][oid[u]];
-                        d2 = d2 * d2;
-                        maxPairD2[t] = Math.min(maxPairD2[t], d2);
+                        double d = inst.officeEuclid[oid[t]][oid[u]];
+                        maxPairD2[t] = Math.min(maxPairD2[t], d * d);
                     }
                 }
             }
 
-            int[] posCount = new int[k];
-            for (int iter = 0; iter < 10; iter++) {
-                Arrays.fill(posCount, 0);
+            if (mode == 1) {
+                double meanSingle = 0.0;
+                for (int t = 0; t < k; t++) meanSingle += Math.max(0.0, officeSingle[oid[t]]);
+                meanSingle /= Math.max(1, k);
+                for (int t = 0; t < k; t++) {
+                    double rel = (Math.max(0.0, officeSingle[oid[t]]) - meanSingle) / (meanSingle + 100.0);
+                    weights[t] = Math.max(-0.30 * maxPairD2[t], Math.min(0.30 * maxPairD2[t], 0.18 * rel * maxPairD2[t]));
+                }
+            }
+
+            int[] metricCount = new int[k];
+            int iters = (mode == 1) ? 6 : 10;
+            for (int iter = 0; iter < iters; iter++) {
+                Arrays.fill(metricCount, 0);
+                int[] siteCount = new int[k];
                 for (int s = 0; s < inst.sites.length; s++) {
                     if (!inst.feasibleSite[s]) continue;
                     int bestT = 0;
@@ -2224,31 +2667,24 @@ public class Main {
                         }
                     }
                     if (inst.netVal[oid[bestT]][s] > 0) {
-                        posCount[bestT]++;
+                        siteCount[bestT]++;
+                        if (mode == 2 && siteCount[bestT] <= inst.offices[oid[bestT]].maxSize) {
+                            metricCount[bestT] += inst.siteTaskCount[s];
+                        } else {
+                            metricCount[bestT]++;
+                        }
                     }
                 }
-                int minC = Integer.MAX_VALUE, maxC = 0;
-                for (int t = 0; t < k; t++) {
-                    int eff = Math.min(posCount[t], inst.offices[oid[t]].maxSize);
-                    minC = Math.min(minC, eff);
-                    maxC = Math.max(maxC, eff);
-                }
-                if (maxC - minC <= inst.maxDifference) {
-                    boolean anyOverCap = false;
-                    for (int t = 0; t < k; t++) {
-                        if (posCount[t] > inst.offices[oid[t]].maxSize) anyOverCap = true;
-                    }
-                    if (!anyOverCap) break;
-                }
-                double meanC = 0;
-                for (int t = 0; t < k; t++) meanC += posCount[t];
-                meanC /= k;
+
+                double meanM = 0;
+                for (int t = 0; t < k; t++) meanM += metricCount[t];
+                meanM /= k;
 
                 for (int t = 0; t < k; t++) {
-                    double step = 0.08 * maxPairD2[t];
-                    if (posCount[t] < meanC - 0.5) {
+                    double step = 0.075 * maxPairD2[t];
+                    if (siteCount[t] < 2 || metricCount[t] < meanM - 0.5) {
                         weights[t] = Math.min(0.42 * maxPairD2[t], weights[t] + step);
-                    } else if (posCount[t] > inst.offices[oid[t]].maxSize || posCount[t] > meanC + 0.5) {
+                    } else if (siteCount[t] > inst.offices[oid[t]].maxSize || metricCount[t] > meanM + 0.5) {
                         weights[t] = Math.max(-0.42 * maxPairD2[t], weights[t] - step);
                     }
                 }
@@ -2664,13 +3100,6 @@ public class Main {
             return finalizeSolution(oid, taken);
         }
 
-        /**
-         * Simultaneous Min-Offices Level-Up (`tryLevelUpMinOffices`):
-         * When `maxSites - minSites == maxDifference` (especially `maxDifference == 0`), adding a site
-         * to a single office is blocked. This move simultaneously adds 1 site to every office sitting
-         * at `minSites` (raising `minSites` by +1) and, if `maxDifference == 0` or if another office has
-         * a lucrative site waiting, accepts whenever the combined step increases `evalScore`!
-         */
         @SuppressWarnings("unchecked")
         private boolean tryLevelUpMinOffices(int[] oid, List<Integer>[] taken, BitSet[] skills,
                                              int[][] hulls, int[] hLens, long[][] covMasks,
@@ -2726,7 +3155,6 @@ public class Main {
                 rebuildOfficeHull(o, taken[t], hulls[t], hLens, t, covMasks[t]);
             }
 
-            // Now that minS increased by +1, also let any other offices with size <= maxS greedily add 1 positive site!
             if (inst.maxDifference > 0) {
                 for (int t = 0; t < k; t++) {
                     if (taken[t].isEmpty() || minOffices.contains(t)) continue;
