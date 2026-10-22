@@ -649,8 +649,30 @@ class TrenchManager {
     }
 }
 
+foreign func getchar(): Int32
+foreign func putchar(c: Int32): Int32
+foreign func fflush(stream: Int64): Int32
+
+func readFastInt(): Int64 {
+    var val: Int64 = 0
+    var neg = false
+    var c = unsafe { getchar() }
+    while (c != -1 && c <= 32) {
+        c = unsafe { getchar() }
+    }
+    if (c == -1) { return 0 }
+    if (c == 45) {
+        neg = true
+        c = unsafe { getchar() }
+    }
+    while (c >= 48 && c <= 57) {
+        val = val * 10 + Int64(c - 48)
+        c = unsafe { getchar() }
+    }
+    return if (neg) { -val } else { val }
+}
+
 let outBuf = Array<UInt8>(64, repeat: 0)
-let g_sout = getStdOut()
 
 func write2(a: Int64, b: Int64) {
     var p = 0
@@ -700,8 +722,12 @@ func write2(a: Int64, b: Int64) {
     }
     outBuf[p] = 10
     p += 1
-    g_sout.write(outBuf[0..p])
-    g_sout.flush()
+    unsafe {
+        for (k in 0..p) {
+            putchar(Int32(outBuf[k]))
+        }
+        fflush(0)
+    }
 }
 
 func write1(a: Int64) {
@@ -729,26 +755,20 @@ func write1(a: Int64) {
     }
     outBuf[p] = 10
     p += 1
-    g_sout.write(outBuf[0..p])
-    g_sout.flush()
+    unsafe {
+        for (k in 0..p) {
+            putchar(Int32(outBuf[k]))
+        }
+        fflush(0)
+    }
 }
 
 main(): Int64 {
     let manager = TrenchManager()
     var pidCounter: Int64 = 0
-    let input = getStdIn()
 
     while (true) {
-        let optLine = input.readln()
-        if (optLine.isNone()) {
-            break
-        }
-        let line = optLine.getOrThrow().trimAscii()
-        if (line.size == 0) {
-            continue
-        }
-
-        let cmd = Int64.parse(line)
+        let cmd = readFastInt()
         if (cmd == 0) {
             break
         }
