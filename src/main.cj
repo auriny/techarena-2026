@@ -160,8 +160,6 @@ class TrenchManager {
     private var distinctLens: Int64 = 0
     private let seenLens = Array<Bool>(41, { _ => false })
 
-    // Small bins are heaps ordered by address. The large bin is ordered by
-    // (length, address), so a large free interval is no longer picked at random.
     private func precedes(a: FreeBlock, b: FreeBlock): Bool {
         if (a.len > 40 && a.len != b.len) {
             return a.len < b.len
@@ -297,8 +295,7 @@ class TrenchManager {
                 this.unregisterBlock(tailBlock)
             }
             n = (blockStart + reqLen - this.trenchLength + 19) / 20
-            // Repeated equal lengths benefit from blocks containing several
-            // pipes: later removals can coalesce instead of leaving tiny gaps.
+
             if (batch) {
                 var count: Int64 = 16
                 if (this.previousRun > 0) {
