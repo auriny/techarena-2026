@@ -121,11 +121,13 @@ class FreeBlock {
     public var start: Int64
     public var len: Int64
     public var binIdx: Int64
+    public var addressIdx: Int64
 
     public init(start: Int64, len: Int64) {
         this.start = start
         this.len = len
         this.binIdx = -1
+        this.addressIdx = -1
     }
 
     public prop end: Int64 {
@@ -135,15 +137,23 @@ class FreeBlock {
 
 class TrenchManager {
     private var trenchLength: Int64 = 0
+    private var occupiedLength: Int64 = 0
+    private var peakOccupiedLength: Int64 = 0
 
     private let startToBlock = HashMap<Int64, FreeBlock>()
     private let endToBlock = HashMap<Int64, FreeBlock>()
 
     private let bins = Array<ArrayList<FreeBlock>>(41, { _ => ArrayList<FreeBlock>() })
     private let largeBin = ArrayList<FreeBlock>()
+    private let largeAddressBin = ArrayList<FreeBlock>()
 
     private let pipeStarts = Array<Int64>(200005, repeat: 0)
     private let pipeLens = Array<Int64>(200005, repeat: 0)
+
+    private let startToPid = HashMap<Int64, Int64>()
+    private let endToPid = HashMap<Int64, Int64>()
+    private var lastFreedPid: Int64 = 0
+    private var ascendingFrees: Int64 = 0
 
     private var firstLength: Int64 = 0
     private var lastLength: Int64 = 0
@@ -160,36 +170,41 @@ class TrenchManager {
     private var distinctLens: Int64 = 0
     private let seenLens = Array<Bool>(41, { _ => false })
 
-    private func precedes(a: FreeBlock, b: FreeBlock): Bool {
-        if (a.len > 40 && a.len != b.len) {
+    private func precedes(a: FreeBlock, b: FreeBlock, byAddress: Bool): Bool {
+        if (!byAddress && a.len > 40 && a.len != b.len) {
             return a.len < b.len
         }
         return a.start < b.start
     }
 
-    private func swapBlocks(bin: ArrayList<FreeBlock>, a: Int64, b: Int64) {
+    private func swapBlocks(bin: ArrayList<FreeBlock>, a: Int64, b: Int64, byAddress: Bool) {
         let block = bin[a]
         bin[a] = bin[b]
         bin[b] = block
-        bin[a].binIdx = a
-        bin[b].binIdx = b
+        if (byAddress) {
+            bin[a].addressIdx = a
+            bin[b].addressIdx = b
+        } else {
+            bin[a].binIdx = a
+            bin[b].binIdx = b
+        }
     }
 
-    private func restoreHeap(bin: ArrayList<FreeBlock>, index: Int64) {
+    private func restoreHeap(bin: ArrayList<FreeBlock>, index: Int64, byAddress: Bool) {
         var at = index
         while (at > 0) {
             let parent = (at - 1) / 2
-            if (!this.precedes(bin[at], bin[parent])) { break }
-            this.swapBlocks(bin, at, parent)
+            if (!this.precedes(bin[at], bin[parent], byAddress)) { break }
+            this.swapBlocks(bin, at, parent, byAddress)
             at = parent
         }
         while (at * 2 + 1 < bin.size) {
             var child = at * 2 + 1
-            if (child + 1 < bin.size && this.precedes(bin[child + 1], bin[child])) {
+            if (child + 1 < bin.size && this.precedes(bin[child + 1], bin[child], byAddress)) {
                 child += 1
             }
-            if (!this.precedes(bin[child], bin[at])) { break }
-            this.swapBlocks(bin, at, child)
+            if (!this.precedes(bin[child], bin[at], byAddress)) { break }
+            this.swapBlocks(bin, at, child, byAddress)
             at = child
         }
     }
@@ -208,7 +223,12 @@ class TrenchManager {
         let targetBin = this.getBin(block.len)
         block.binIdx = targetBin.size
         targetBin.add(block)
-        this.restoreHeap(targetBin, block.binIdx)
+        this.restoreHeap(targetBin, block.binIdx, false)
+        if (block.len > 40) {
+            block.addressIdx = this.largeAddressBin.size
+            this.largeAddressBin.add(block)
+            this.restoreHeap(this.largeAddressBin, block.addressIdx, true)
+        }
     }
 
     private func unregisterBlock(block: FreeBlock) {
@@ -228,12 +248,30 @@ class TrenchManager {
         targetBin.remove(at: lastIdx)
         block.binIdx = -1
         if (idx < targetBin.size) {
-            this.restoreHeap(targetBin, idx)
+            this.restoreHeap(targetBin, idx, false)
+        }
+        if (block.len > 40) {
+            let addressIdx = block.addressIdx
+            let lastAddressIdx = this.largeAddressBin.size - 1
+            if (addressIdx != lastAddressIdx) {
+                let lastBlock = this.largeAddressBin[lastAddressIdx]
+                this.largeAddressBin[addressIdx] = lastBlock
+                lastBlock.addressIdx = addressIdx
+            }
+            this.largeAddressBin.remove(at: lastAddressIdx)
+            block.addressIdx = -1
+            if (addressIdx < this.largeAddressBin.size) {
+                this.restoreHeap(this.largeAddressBin, addressIdx, true)
+            }
         }
     }
 
     public func allocate(pid: Int64, reqLen: Int64): (Int64, Int64) {
         this.totalAllocs += 1
+        this.occupiedLength += reqLen
+        if (this.occupiedLength > this.peakOccupiedLength) {
+            this.peakOccupiedLength = this.occupiedLength
+        }
         if (!this.seenLens[reqLen]) { this.seenLens[reqLen] = true; this.distinctLens += 1 }
         if (pid == 1) { this.firstLength = reqLen }
         if (reqLen == this.lastLength) {
@@ -271,7 +309,10 @@ class TrenchManager {
         }
 
         if (firstFit) {
-            for (candidate in this.largeBin) {
+            // Large holes fit every legal request. The address heap preserves
+            // exact first-fit behavior without a potentially quadratic scan.
+            if (this.largeAddressBin.size > 0) {
+                let candidate = this.largeAddressBin[0]
                 if (let Some(previous) <- chosenBlock) {
                     if (candidate.start < previous.start) { chosenBlock = Some(candidate) }
                 } else {
@@ -303,7 +344,10 @@ class TrenchManager {
                     if (count < 1) { count = 1 }
                 }
                 let batchGrowth = (reqLen * count + 19) / 20
-                if (batchGrowth > n) { n = batchGrowth }
+                let lowerBoundUnits = (this.peakOccupiedLength + 19) / 20
+                let reserveUnits = 2 * lowerBoundUnits - this.trenchLength / 20
+                let safeGrowth = if (batchGrowth < reserveUnits) { batchGrowth } else { reserveUnits }
+                if (safeGrowth > n) { n = safeGrowth }
             }
             this.trenchLength += n * 20
             blockLength = this.trenchLength - blockStart
@@ -319,12 +363,25 @@ class TrenchManager {
         if (blockStart + blockLength == this.trenchLength && !batch && !initialWindow) {
             useRight = false
         }
+        // With sustained oldest-first removal, leave the free remainder next
+        // to the older neighbor so their space can coalesce when it is freed.
+        // Keep hole selection, speculative runs and initial packing unchanged.
+        if (!batch && !initialWindow && this.ascendingFrees >= 8 &&
+            blockStart + blockLength < this.trenchLength && blockLength > reqLen) {
+            if (let Some(leftPid) <- this.endToPid.get(blockStart)) {
+                if (let Some(rightPid) <- this.startToPid.get(blockStart + blockLength)) {
+                    useRight = rightPid > leftPid
+                }
+            }
+        }
         let pipeStart = if (useRight) { blockStart + blockLength - reqLen } else { blockStart }
         let remainderStart = if (useRight) { blockStart } else { blockStart + reqLen }
         if (blockLength > reqLen) {
             this.registerBlock(FreeBlock(remainderStart, blockLength - reqLen))
         }
 
+        this.startToPid.add(pipeStart, pid)
+        this.endToPid.add(pipeStart + reqLen, pid)
         this.pipeStarts[pid] = pipeStart
         this.pipeLens[pid] = reqLen
 
@@ -337,8 +394,13 @@ class TrenchManager {
         if (pipeLen == 0) {
             return 0
         }
+        this.ascendingFrees = if (pid > this.lastFreedPid) { this.ascendingFrees + 1 } else { 0 }
+        this.lastFreedPid = pid
         let pipeStart = this.pipeStarts[pid]
         this.pipeLens[pid] = 0
+        this.startToPid.remove(pipeStart)
+        this.endToPid.remove(pipeStart + pipeLen)
+        this.occupiedLength -= pipeLen
 
         this.removalStarted = true
         this.removedInRun += 1
